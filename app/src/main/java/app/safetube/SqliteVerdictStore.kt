@@ -12,7 +12,7 @@ import app.safetube.core.VideoInfo
 
 /** On-device cache of decisions, so each video is checked by the AI only once per set of rules. */
 class SqliteVerdictStore(context: Context) :
-    SQLiteOpenHelper(context.applicationContext, "verdicts.db", null, 1), VerdictStore {
+    SQLiteOpenHelper(context.applicationContext, "verdicts.db", null, 2), VerdictStore {
 
     data class HiddenVideo(
         val id: String,
@@ -22,20 +22,26 @@ class SqliteVerdictStore(context: Context) :
         val score: Double?,
     )
 
-    data class ParentChoice(val id: String, val title: String, val verdict: Verdict)
+    /** A video the parent (or, if allowed, the child) hid or allowed by hand. by is "parent" or "child". */
+    data class ParentChoice(val id: String, val title: String, val verdict: Verdict, val by: String)
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             "CREATE TABLE scores (id TEXT NOT NULL, hash TEXT NOT NULL, p REAL NOT NULL, reason TEXT, " +
                 "title TEXT, ts INTEGER NOT NULL, PRIMARY KEY (id, hash))"
         )
-        db.execSQL("CREATE TABLE overrides (id TEXT PRIMARY KEY, verdict TEXT NOT NULL, title TEXT, ts INTEGER NOT NULL)")
+        db.execSQL(
+            "CREATE TABLE overrides (id TEXT PRIMARY KEY, verdict TEXT NOT NULL, title TEXT, ts INTEGER NOT NULL, " +
+                "who TEXT NOT NULL DEFAULT 'parent')"
+        )
         db.execSQL(
             "CREATE TABLE hidden (id TEXT PRIMARY KEY, title TEXT, channel TEXT, reason TEXT, p REAL, ts INTEGER NOT NULL)"
         )
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) db.execSQL("ALTER TABLE overrides ADD COLUMN who TEXT NOT NULL DEFAULT 'parent'")
+    }
 
     override fun cachedScore(id: String, configHash: String): Score? =
         readableDatabase.rawQuery("SELECT p, reason FROM scores WHERE id = ? AND hash = ?", arrayOf(id, configHash)).use {
@@ -64,7 +70,7 @@ class SqliteVerdictStore(context: Context) :
 
     override fun setOverride(id: String, verdict: Verdict?) = setOverride(id, verdict, null)
 
-    fun setOverride(id: String, verdict: Verdict?, title: String?) {
+    fun setOverride(id: String, verdict: Verdict?, title: String?, by: String = "parent") {
         if (verdict == null) {
             writableDatabase.delete("overrides", "id = ?", arrayOf(id))
             return
@@ -76,6 +82,7 @@ class SqliteVerdictStore(context: Context) :
                 put("verdict", verdict.name)
                 put("title", title ?: titleFor(id))
                 put("ts", System.currentTimeMillis())
+                put("who", by)
             },
             SQLiteDatabase.CONFLICT_REPLACE,
         )
@@ -114,13 +121,18 @@ class SqliteVerdictStore(context: Context) :
         }
 
     fun parentChoices(): List<ParentChoice> =
-        readableDatabase.rawQuery("SELECT id, title, verdict FROM overrides ORDER BY ts DESC", null).use { c ->
+        readableDatabase.rawQuery("SELECT id, title, verdict, who FROM overrides ORDER BY ts DESC", null).use { c ->
             buildList {
                 while (c.moveToNext()) {
                     val v = Verdict.entries.firstOrNull { it.name == c.getString(2) } ?: continue
-                    add(ParentChoice(c.getString(0), c.getString(1) ?: "", v))
+                    add(ParentChoice(c.getString(0), c.getString(1) ?: "", v, c.getString(3) ?: "parent"))
                 }
             }
+        }
+
+    fun hiddenSince(ts: Long): Int =
+        readableDatabase.rawQuery("SELECT COUNT(*) FROM hidden WHERE ts >= ?", arrayOf(ts.toString())).use {
+            if (it.moveToFirst()) it.getInt(0) else 0
         }
 
     /** Forget AI scores and the hidden list (parent choices are kept). */

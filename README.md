@@ -21,15 +21,16 @@ rules simply aren't there.
   thumbnail against your plain-English rules.
 - **Direct links and autoplay are checked too.** If a video opens some other way (a shared
   link, "up next", autoplay), the player stays hidden and paused until the video is checked.
-  Blocked videos show "This video isn't available".
+  Blocked videos show "This one isn't available" with a button back to the videos.
 - **Decisions are remembered.** Each video is checked once per set of rules and cached on
   the device, so it costs almost nothing after the first few days.
 - **Strict / Balanced / Relaxed.** Strict (the default) hides anything the AI isn't fairly
   sure is fine.
-- **Hold to block.** Hold any video (or tap 🚫 while one is playing) and choose "Block this
-  video" or "Block this channel". By default children can do this themselves, since blocking
-  has no downside; only a parent can unblock. Turn that off and blocking asks for the PIN.
-- **Block by link too.** In parent settings, paste a video link, a channel link, an @handle or
+- **Hold to hide.** Hold any video (or tap Hide while one is playing) and choose "Hide this
+  video" or "Hide everything from" its channel. By default children can do this themselves,
+  since hiding has no downside; only a parent can bring it back. Turn that off and hiding asks
+  for the PIN.
+- **Hide by link too.** In parent settings, paste a video link, a channel link, an @handle or
   a channel name.
 - **AI-written keyword lists.** Describe what you don't want and a chat model (Gemini's free
   tier works) suggests every keyword it can think of. You review the list before saving.
@@ -47,15 +48,16 @@ is ever sent to the AI. SafeTube never sees any other traffic on the device.
    Sources** (for the Silk browser or your file manager).
 2. Download `SafeTube.apk` from this repository's **Releases** page (the "latest" release is
    rebuilt on every change) and open it.
-3. Open SafeTube, choose a parent PIN, and review the rules.
+3. Open SafeTube. Setup takes about two minutes: choose a parent PIN, tap what to hide
+   (scary stuff, pranks, violence, unboxing...), and optionally add a smart checker.
 4. Recommended: in **Settings → Parental Controls** (or Amazon Kids), block the Silk browser
    and the YouTube app so SafeTube is the only way onto YouTube.
 
 ## Choosing an AI (optional)
 
 Without an AI, the keyword list and your blocked videos and channels still work, fully
-offline. Hold the faint 🔒 in the top corner for two seconds, enter your PIN, and set up
-one or both of these:
+offline. Hold the faint lock in the top corner for two seconds, enter your PIN, open
+**Smart checker**, and set up one or both of these:
 
 **Video checker** decides each video against your rules. Decision models are built for
 exactly this kind of yes/no question and answer in a fraction of a second.
@@ -71,7 +73,7 @@ exactly this kind of yes/no question and answer in a fraction of a second.
 Tap "Use Gemini (free tier)" and paste a key from aistudio.google.com, or use Claude or any
 OpenAI-compatible model.
 
-Use **Test the AI** to see how your rules treat a Halloween song and a normal song.
+Use **Test it** to see how your rules treat a Halloween song and a normal song.
 
 Keys stay on the tablet and are sent only to the providers you chose. Never put your own key
 into an APK you share with other people.
@@ -91,6 +93,7 @@ Tests:
 SKIP_ANDROID=1 ./gradlew :core:test          # filtering engine, no Android SDK needed
 cd tools/filter-test && npm install && npx playwright install chromium && node run.js
                                              # page script against a mock YouTube page
+node ../parent-test/run.js                   # PIN, setup and parent settings screens
 ```
 
 Every push to `main` builds an APK in GitHub Actions and publishes it as the "latest"
@@ -106,7 +109,9 @@ from a different machine.
 | --- | --- |
 | `core/` | The filtering engine in plain Kotlin: channel and keyword blocking, the `VideoClassifier` interface with Clef, Jev, Anthropic and OpenAI-compatible providers, keyword suggestions, caching rules and strictness. No Android code, so a browser extension or TV app can reuse the same logic. |
 | `app/src/main/assets/filter.js` | The script that runs inside YouTube pages: hides unchecked videos, sends them to the app, applies decisions, guards the player. |
-| `app/src/main/java/app/safetube/` | The Android app: WebView, PIN-protected parent settings, SQLite decision cache. |
+| `app/src/main/assets/parent/` | The PIN pad, first-run setup and parent settings screens (HTML/CSS/JS, shown in the app's own WebView). |
+| `app/src/main/java/app/safetube/` | The Android app: the YouTube WebView, the bridge to the parent screens, SQLite decision cache. |
+| `tools/parent-test/` | Headless-browser tests for the parent screens. |
 | `tools/filter-test/` | Headless-browser tests for `filter.js` against a mock YouTube page. |
 
 ## When YouTube changes its website

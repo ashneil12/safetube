@@ -135,6 +135,8 @@ function check(name, cond) {
   check('player hidden on a blocked video', (await vis('#player')) === 'hidden');
   const blockedText = await page.$eval('#st-overlay', (el) => el.textContent).catch(() => '');
   check('blocked video shows "isn\'t available"', blockedText.includes("isn't available"));
+  check('blocked screen offers a way back', blockedText.includes('Back to videos'));
+  if (SHOTS) await page.screenshot({ path: path.join(__dirname, 'screenshots/4-blocked.png') });
 
   await page.evaluate(() => history.pushState({}, '', '/watch?v=FRESHVIDEO1'));
   await page.waitForTimeout(100);
@@ -158,9 +160,9 @@ function check(name, cond) {
   check('block button shows on an allowed video', (await page.$('#st-block-btn')) !== null);
   await page.click('#st-block-btn');
   check('block button opens the menu', (await page.$('#st-sheet')) !== null);
-  await page.click('#st-sheet >> text=Block this video');
+  await page.click('#st-sheet >> text=Hide this video');
   let blocks = await page.evaluate(() => window.__blocks.splice(0));
-  check('"Block this video" asks the app to block the playing video',
+  check('"Hide this video" asks the app to block the playing video',
     blocks.length === 1 && blocks[0].kind === 'video' && blocks[0].id === 'FRESHVIDEO1');
   check('menu closes after choosing', (await page.$('#st-sheet')) === null);
 
@@ -170,7 +172,7 @@ function check(name, cond) {
   await page.dispatchEvent('#card-WHEELSBUS01 h3', 'contextmenu');
   const sheetText = await page.$eval('#st-sheet', (el) => el.textContent).catch(() => '');
   check('long-press on a video opens the menu with its title', sheetText.includes('Wheels On The Bus'));
-  check('menu names the channel', sheetText.includes('Block this channel (Super Simple Songs)'));
+  check('menu names the channel', sheetText.includes('Hide everything from Super Simple Songs'));
   if (SHOTS) await page.screenshot({ path: path.join(__dirname, 'screenshots/3-hold-menu.png') });
   const leaked = await page.evaluate(() => {
     const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
@@ -178,9 +180,9 @@ function check(name, cond) {
     return !ev.defaultPrevented;
   });
   check('the tap that ends a long-press does not open the video', !leaked);
-  await page.click('#st-sheet >> text=Block this channel');
+  await page.click('#st-sheet >> text=Hide everything from');
   blocks = await page.evaluate(() => window.__blocks.splice(0));
-  check('"Block this channel" sends the channel handle',
+  check('"Hide everything from" sends the channel handle',
     blocks.length === 1 && blocks[0].kind === 'channel' && blocks[0].channelId === '/@SuperSimpleSongs' &&
     blocks[0].channel === 'Super Simple Songs');
   await page.dispatchEvent('#card-NUMBERS0001 h3', 'contextmenu');

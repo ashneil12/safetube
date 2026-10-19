@@ -53,6 +53,7 @@ class FilterBridge(
                 videos.map { Decision(it.id, Verdict.UNKNOWN, DecisionSource.ERROR, reason = e.toString()) }
             }
             decisions.firstOrNull { it.source == DecisionSource.ERROR }?.let { onAiError(it.reason) }
+            prefs.recordChecked(decisions.count { it.verdict != Verdict.UNKNOWN })
             val result = JSONObject()
             decisions.forEach { result.put(it.id, it.verdict.wire) }
             main.post {

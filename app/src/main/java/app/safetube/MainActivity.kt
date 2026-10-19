@@ -2,14 +2,12 @@ package app.safetube
 
 import android.annotation.SuppressLint
 import android.app.Activity
-import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
-import android.text.InputType
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -21,16 +19,16 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.EditText
+import android.widget.ImageView
 import android.widget.FrameLayout
 import android.widget.ProgressBar
-import android.widget.TextView
 import android.widget.Toast
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import app.safetube.core.DecisionEngine
 import app.safetube.core.Verdict
 import app.safetube.core.YouTubeOEmbed
+import org.json.JSONObject
 
 /**
  * The child's screen: normal YouTube in a WebView, with the filter script running on every page.
@@ -49,6 +47,7 @@ class MainActivity : Activity() {
     private var fullscreenView: View? = null
     private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
     private var lastErrorToast = 0L
+    private var pendingBlock: FilterBridge.BlockRequest? = null
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -239,14 +238,13 @@ class MainActivity : Activity() {
 
     /** A faint lock in the corner. Hold it for two seconds to reach the parent settings. */
     @SuppressLint("ClickableViewAccessibility")
-    private fun buildParentButton(): View = TextView(this).apply {
-        text = "🔒"
-        textSize = 16f
-        gravity = Gravity.CENTER
-        alpha = 0.35f
+    private fun buildParentButton(): View = ImageView(this).apply {
+        setImageResource(R.drawable.ic_lock)
+        scaleType = ImageView.ScaleType.CENTER
+        alpha = 0.4f
         contentDescription = "Parent settings (hold)"
         val open = Runnable {
-            // Pass the page that's open so the parent can block that video or channel in one tap.
+            // Pass the page that's open so the parent can hide that video or channel in one tap.
             startActivity(
                 Intent(this@MainActivity, ParentActivity::class.java)
                     .putExtra(ParentActivity.EXTRA_CURRENT_URL, webView.url)
@@ -254,8 +252,12 @@ class MainActivity : Activity() {
         }
         setOnTouchListener { v, e ->
             when (e.actionMasked) {
-                MotionEvent.ACTION_DOWN -> v.postDelayed(open, 2000)
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> v.removeCallbacks(open)
+                MotionEvent.ACTION_DOWN -> { v.animate().alpha(0.9f).setDuration(2000).start(); v.postDelayed(open, 2000) }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    v.removeCallbacks(open)
+                    v.animate().cancel()
+                    v.alpha = 0.4f
+                }
             }
             true
         }
@@ -265,31 +267,35 @@ class MainActivity : Activity() {
 
     private fun onBlockRequest(req: FilterBridge.BlockRequest) {
         if (prefs.kidsCanBlock) {
-            applyBlock(req)
+            applyBlock(req, by = "child")
             return
         }
-        // Blocking is parent-only in this mode: ask for the PIN first.
-        val input = EditText(this).apply {
-            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
-            hint = "Parent PIN"
-        }
-        AlertDialog.Builder(this)
-            .setTitle(if (req.channel) "Block this channel?" else "Block this video?")
-            .setView(FrameLayout(this).apply { setPadding(dp(24), dp(8), dp(24), 0); addView(input) })
-            .setPositiveButton("Block") { _, _ ->
-                if (prefs.checkPin(input.text.toString())) applyBlock(req) else toast("Wrong PIN")
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+        // Hiding is parent-only in this mode: show the PIN pad, then hide it if the PIN was right.
+        pendingBlock = req
+        val v = req.video
+        val json = JSONObject()
+            .put("kind", if (req.channel) "channel" else "video")
+            .put("title", v.title)
+            .put("channel", v.channel)
+            .toString()
+        startActivityForResult(Intent(this, ParentActivity::class.java).putExtra(ParentActivity.EXTRA_BLOCK, json), REQ_BLOCK)
     }
 
-    private fun applyBlock(req: FilterBridge.BlockRequest) {
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_BLOCK) return
+        val req = pendingBlock
+        pendingBlock = null
+        if (resultCode == RESULT_OK && req != null) applyBlock(req, by = "parent")
+    }
+
+    private fun applyBlock(req: FilterBridge.BlockRequest, by: String) {
         val v = req.video
         if (!req.channel) {
-            store.setOverride(v.id, Verdict.BLOCK, v.title.ifBlank { null })
+            store.setOverride(v.id, Verdict.BLOCK, v.title.ifBlank { null }, by)
             bridge.hideNow(v.id)
             syncVersion()
-            toast("Video blocked. A grown-up can unblock it in parent settings.")
+            toast(if (by == "child") "Hidden. Only a grown-up can bring it back." else "Hidden.")
             return
         }
         Thread {
@@ -306,7 +312,8 @@ class MainActivity : Activity() {
                 syncVersion()
                 // Re-check everything on screen against the new channel list.
                 webView.evaluateJavascript("window.__safetube && window.__safetube.reset(${prefs.pageConfigJson()})", null)
-                toast("${name.ifBlank { handle }} blocked. A grown-up can unblock it in parent settings.")
+                toast("Everything from ${name.ifBlank { handle }} is hidden." +
+                    if (by == "child") " Only a grown-up can bring it back." else "")
             }
         }.start()
     }
@@ -332,6 +339,7 @@ class MainActivity : Activity() {
 
     companion object {
         const val START_URL = "https://m.youtube.com/"
+        private const val REQ_BLOCK = 1
         private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
         private val SIGN_IN_HOSTS = setOf(

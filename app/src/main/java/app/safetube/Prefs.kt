@@ -116,12 +116,31 @@ class Prefs(context: Context) {
 
     fun setPin(pin: String) {
         val salt = Hashing.newSalt()
-        sp.edit().putString("pinSalt", salt).putString("pinHash", Hashing.pinHash(pin, salt)).apply()
+        sp.edit().putString("pinSalt", salt).putString("pinHash", Hashing.pinHash(pin, salt))
+            .putInt("pinLength", pin.length).apply()
     }
+
+    /** Length of the PIN, so the keypad knows when to say it's wrong. 0 for PINs set before this was kept. */
+    val pinLength: Int get() = sp.getInt("pinLength", 0)
 
     fun checkPin(pin: String): Boolean {
         val salt = sp.getString("pinSalt", null) ?: return false
         return sp.getString("pinHash", null) == Hashing.pinHash(pin, salt)
+    }
+
+    // ---- the overview's "videos checked today" count
+
+    @Synchronized
+    fun recordChecked(count: Int) {
+        val today = dayKey()
+        val sofar = if (sp.getInt("checkedDay", 0) == today) sp.getInt("checkedCount", 0) else 0
+        sp.edit().putInt("checkedDay", today).putInt("checkedCount", sofar + count).apply()
+    }
+
+    fun checkedToday(): Int = if (sp.getInt("checkedDay", 0) == dayKey()) sp.getInt("checkedCount", 0) else 0
+
+    private fun dayKey(): Int = java.util.Calendar.getInstance().let {
+        it.get(java.util.Calendar.YEAR) * 1000 + it.get(java.util.Calendar.DAY_OF_YEAR)
     }
 
     // ---- what the engine and the page need
@@ -145,6 +164,7 @@ class Prefs(context: Context) {
         .put("hideShorts", hideShorts)
         .put("hideComments", hideComments)
         .put("blockMenu", true)
+        .put("kidsCanBlock", kidsCanBlock)
         .put("debug", BuildConfigFlags.DEBUG)
         .toString()
 

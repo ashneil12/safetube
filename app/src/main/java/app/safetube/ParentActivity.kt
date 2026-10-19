@@ -1,25 +1,20 @@
 package app.safetube
 
+import android.annotation.SuppressLint
 import android.app.Activity
-import android.app.AlertDialog
-import android.graphics.Typeface
+import android.content.Intent
+import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.text.InputType
-import android.view.View
-import android.view.ViewGroup
 import android.view.WindowManager
-import android.widget.Button
-import android.widget.CheckBox
-import android.widget.EditText
-import android.widget.LinearLayout
-import android.widget.RadioButton
-import android.widget.RadioGroup
-import android.widget.ScrollView
-import android.widget.TextView
-import android.widget.Toast
+import android.webkit.JavascriptInterface
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.webkit.WebViewAssetLoader
 import app.safetube.core.ChannelBlocklist
 import app.safetube.core.Classifiers
 import app.safetube.core.KeywordFilter
@@ -31,44 +26,25 @@ import app.safetube.core.Verdict
 import app.safetube.core.VideoInfo
 import app.safetube.core.VideoLinks
 import app.safetube.core.YouTubeOEmbed
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.concurrent.Executors
 
 /**
- * PIN-protected settings: the rules in plain English, the keyword list, how strict to be,
- * which AI to use, and the list of hidden videos the parent can let through.
+ * The PIN, first-run setup and parent settings. The screens themselves are the page in
+ * assets/parent/, shown in a WebView that can't load anything else; this class is the bridge
+ * between that page and the app's settings and decision cache.
  */
 class ParentActivity : Activity() {
     private lateinit var prefs: Prefs
     private lateinit var store: SqliteVerdictStore
+    private lateinit var webView: WebView
     private val io = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
+    /** Set once the PIN has been entered (or first created) in this screen. */
+    @Volatile private var unlocked = false
 
-    private lateinit var rules: EditText
-    private lateinit var keywords: EditText
-    private lateinit var strictness: RadioGroup
-    private lateinit var provider: RadioGroup
-    private lateinit var accountId: EditText
-    private lateinit var apiKey: EditText
-    private lateinit var baseUrl: EditText
-    private lateinit var model: EditText
-    private lateinit var thumbs: CheckBox
-    private lateinit var hideShorts: CheckBox
-    private lateinit var hideComments: CheckBox
-    private lateinit var kidsCanBlock: CheckBox
-    private lateinit var aiFields: LinearLayout
-    private lateinit var baseUrlRow: View
-    private lateinit var testResult: TextView
-    private lateinit var hiddenList: LinearLayout
-    private lateinit var choicesList: LinearLayout
-    private lateinit var channelsList: LinearLayout
-    private lateinit var blockInput: EditText
-    private lateinit var suggestResult: TextView
-    private lateinit var helper: RadioGroup
-    private lateinit var helperFields: LinearLayout
-    private lateinit var helperKey: EditText
-    private lateinit var helperBaseUrl: EditText
-    private lateinit var helperModel: EditText
-
+    @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Keep settings (and API keys) out of screenshots and the recent-apps preview.
@@ -76,533 +52,326 @@ class ParentActivity : Activity() {
         prefs = Prefs(this)
         store = SqliteVerdictStore(this)
 
-        val setup = intent.getBooleanExtra(EXTRA_SETUP, false) || !prefs.hasPin
-        if (setup) askNewPin(firstTime = true) else askPin()
+        val assets = WebViewAssetLoader.Builder()
+            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .build()
+        webView = WebView(this)
+        // The first screen is always the PIN pad, so match its colour while the page loads.
+        webView.setBackgroundColor(Color.parseColor("#14182B"))
+        webView.settings.apply {
+            javaScriptEnabled = true
+            allowFileAccess = false
+            allowContentAccess = false
+        }
+        webView.addJavascriptInterface(Bridge(), "SafeTubeParent")
+        webView.webViewClient = object : WebViewClient() {
+            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
+                assets.shouldInterceptRequest(request.url)
+
+            // The settings page never navigates; links out go through openLink().
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) = true
+
+            @Deprecated("Needed for API < 24")
+            override fun shouldOverrideUrlLoading(view: WebView, url: String) = true
+        }
+        setContentView(webView)
+        webView.loadUrl(PAGE_URL)
     }
 
     override fun onDestroy() {
         io.shutdownNow()
+        webView.destroy()
         super.onDestroy()
     }
 
-    // ------------------------------------------------------------------ PIN
-
-    private fun askPin() {
-        val input = pinField()
-        AlertDialog.Builder(this)
-            .setTitle("Parent PIN")
-            .setView(padded(input))
-            .setCancelable(false)
-            .setPositiveButton("Unlock") { _, _ ->
-                if (prefs.checkPin(input.text.toString())) showSettings()
-                else { toast("Wrong PIN"); finish() }
-            }
-            .setNegativeButton("Cancel") { _, _ -> finish() }
-            .show()
-    }
-
-    private fun askNewPin(firstTime: Boolean) {
-        val first = pinField().apply { hint = "New PIN (4+ digits)" }
-        val second = pinField().apply { hint = "Repeat PIN" }
-        val box = column().apply {
-            if (firstTime) {
-                addView(TextView(this@ParentActivity).apply {
-                    text = "Choose a PIN. Your child will need it to change what's filtered."
-                    setPadding(0, 0, 0, dp(8))
-                })
-            }
-            addView(first)
-            addView(second)
+    private val mode: String
+        get() = when {
+            intent.hasExtra(EXTRA_BLOCK) -> "block"
+            !prefs.hasPin -> "setup"
+            else -> "unlock"
         }
-        AlertDialog.Builder(this)
-            .setTitle(if (firstTime) "Welcome to SafeTube" else "Change PIN")
-            .setView(padded(box))
-            .setCancelable(!firstTime)
-            .setPositiveButton("Save") { _, _ ->
-                val a = first.text.toString()
-                when {
-                    a.length < 4 -> { toast("PIN must be at least 4 digits"); askNewPin(firstTime) }
-                    a != second.text.toString() -> { toast("PINs didn't match"); askNewPin(firstTime) }
-                    else -> {
-                        prefs.setPin(a)
-                        toast("PIN saved")
-                        if (firstTime) showSettings()
-                    }
-                }
-            }
-            .apply { if (!firstTime) setNegativeButton("Cancel", null) }
-            .show()
-    }
 
-    // ------------------------------------------------------------------ settings screen
+    /** Everything the page can ask of the app. Every method runs on a WebView binder thread. */
+    private inner class Bridge {
+        @JavascriptInterface
+        fun state(): String = JSONObject()
+            .put("mode", mode)
+            .put("pinLength", prefs.pinLength)
+            .put("version", appVersion())
+            .put("current", currentPage())
+            .put("block", intent.getStringExtra(EXTRA_BLOCK)?.let { JSONObject(it) } ?: JSONObject.NULL)
+            .put("settings", if (allowed()) settingsJson() else JSONObject.NULL)
+            .put(
+                "defaults", JSONObject()
+                    .put("geminiBaseUrl", Prefs.GEMINI_BASE_URL)
+                    .put("geminiModel", Prefs.GEMINI_MODEL)
+                    .put(
+                        "models", JSONObject()
+                            .put("CLEF", ProviderConfig.DEFAULT_CLEF_MODEL)
+                            .put("JEV", ProviderConfig.DEFAULT_JEV_MODEL)
+                            .put("ANTHROPIC", ProviderConfig.DEFAULT_ANTHROPIC_MODEL)
+                    )
+            )
+            .toString()
 
-    private fun showSettings() {
-        val page = column().apply { setPadding(dp(20), dp(20), dp(20), dp(40)) }
-
-        addCurrentPageSection(page)
-
-        page.addView(heading("What shouldn't your child see?"))
-        page.addView(note("Describe it in your own words. The AI hides videos that match."))
-        rules = EditText(this).apply {
-            setText(prefs.rules)
-            minLines = 4
-            gravity = android.view.Gravity.TOP
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-        }
-        page.addView(rules)
-
-        page.addView(heading("Always hide videos that mention"))
-        page.addView(note("Comma-separated. Checked instantly on the device, no AI needed."))
-        keywords = EditText(this).apply {
-            setText(prefs.keywords)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-        }
-        page.addView(keywords)
-        suggestResult = note("")
-        page.addView(button("Suggest more keywords from my rules (AI)") { suggestKeywords() })
-        page.addView(suggestResult)
-
-        page.addView(heading("Block a video or channel"))
-        page.addView(note("Paste a video link to hide just that video, or a channel link, @handle or channel name to hide everything from that channel."))
-        blockInput = EditText(this).apply {
-            hint = "youtube.com/watch?v=... or @channel"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-        }
-        page.addView(blockInput)
-        page.addView(button("Block it") { blockFromInput() })
-        page.addView(note("Blocked channels:"))
-        channelsList = column()
-        page.addView(channelsList)
-
-        page.addView(heading("How careful should the AI be?"))
-        strictness = RadioGroup(this)
-        listOf(
-            Strictness.STRICT to "Strict: hide anything that might match",
-            Strictness.BALANCED to "Balanced: hide likely matches",
-            Strictness.PERMISSIVE to "Relaxed: hide only clear matches",
-        ).forEach { (s, label) ->
-            strictness.addView(radio(label, s.ordinal + 1, prefs.strictness == s))
-        }
-        page.addView(strictness)
-
-        page.addView(heading("Video checker AI"))
-        page.addView(note("Decides each video against your rules. Only titles and channel names are sent (plus thumbnails for chat models), using your own key."))
-        provider = RadioGroup(this)
-        listOf(
-            ProviderType.NONE to "Off (keywords and blocks only)",
-            ProviderType.CLEF to "Clef by Cloudflare: fast, free daily allowance (recommended)",
-            ProviderType.JEV to "Jev via OpenRouter: fast, pay per use",
-            ProviderType.ANTHROPIC to "Claude (Anthropic API key)",
-            ProviderType.OPENAI_COMPATIBLE to "OpenAI-compatible (OpenAI, Gemini, Groq, Ollama...)",
-        ).forEach { (t, label) -> provider.addView(radio(label, t.ordinal + 1, prefs.providerType == t)) }
-        page.addView(provider)
-
-        aiFields = column()
-        accountId = EditText(this).apply {
-            hint = "Cloudflare account ID"
-            setText(prefs.accountId)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-        }
-        apiKey = EditText(this).apply {
-            hint = "API key"
-            setText(prefs.apiKey)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-        }
-        baseUrl = EditText(this).apply {
-            hint = "Base URL, e.g. https://openrouter.ai/api/v1"
-            setText(prefs.baseUrl)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-        }
-        model = EditText(this).apply {
-            setText(prefs.model)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-        }
-        thumbs = CheckBox(this).apply {
-            text = "Also check thumbnails (catches more, costs a little more)"
-            isChecked = prefs.sendThumbnails
-        }
-        baseUrlRow = baseUrl
-        aiFields.addView(accountId)
-        aiFields.addView(apiKey)
-        aiFields.addView(baseUrl)
-        aiFields.addView(model)
-        aiFields.addView(thumbs)
-        testResult = note("")
-        aiFields.addView(button("Test the AI") { testAi() })
-        aiFields.addView(testResult)
-        page.addView(aiFields)
-        provider.setOnCheckedChangeListener { _, _ ->
-            // A model name for one provider means nothing to another.
-            model.setText("")
-            refreshProviderFields()
-        }
-        refreshProviderFields()
-
-        page.addView(heading("Keyword helper AI (optional)"))
-        page.addView(note("A chat model that turns your rules into keywords. It only sees your rules, never videos. Gemini's free tier works well."))
-        helper = RadioGroup(this)
-        listOf(
-            ProviderType.NONE to "None",
-            ProviderType.OPENAI_COMPATIBLE to "OpenAI-compatible (Gemini, OpenAI, OpenRouter...)",
-            ProviderType.ANTHROPIC to "Claude (Anthropic API key)",
-        ).forEach { (t, label) -> helper.addView(radio(label, t.ordinal + 1, prefs.helperType == t)) }
-        page.addView(helper)
-        helperFields = column()
-        helperKey = EditText(this).apply {
-            hint = "API key"
-            setText(prefs.helperKey)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-        }
-        helperBaseUrl = EditText(this).apply {
-            hint = "Base URL"
-            setText(prefs.helperBaseUrl)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-        }
-        helperModel = EditText(this).apply {
-            hint = "Model"
-            setText(prefs.helperModel)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-        }
-        helperFields.addView(button("Use Gemini (free tier)") {
-            helper.check(ProviderType.OPENAI_COMPATIBLE.ordinal + 1)
-            helperBaseUrl.setText(Prefs.GEMINI_BASE_URL)
-            helperModel.setText(Prefs.GEMINI_MODEL)
-        })
-        helperFields.addView(helperKey)
-        helperFields.addView(helperBaseUrl)
-        helperFields.addView(helperModel)
-        page.addView(helperFields)
-        helper.setOnCheckedChangeListener { _, _ -> refreshHelperFields() }
-        refreshHelperFields()
-
-        page.addView(heading("YouTube"))
-        hideShorts = CheckBox(this).apply { text = "Hide Shorts"; isChecked = prefs.hideShorts }
-        hideComments = CheckBox(this).apply { text = "Hide comments"; isChecked = prefs.hideComments }
-        page.addView(hideShorts)
-        page.addView(hideComments)
-        kidsCanBlock = CheckBox(this).apply {
-            text = "Let my child block videos and channels too (hold a video). Only you can unblock."
-            isChecked = prefs.kidsCanBlock
-        }
-        page.addView(kidsCanBlock)
-        page.addView(note("Hold any video, or tap \uD83D\uDEAB while one is playing, to block it or its channel. With this off, blocking asks for your PIN."))
-
-        page.addView(button("Save") { save(); finish() })
-
-        page.addView(heading("Recently hidden"))
-        page.addView(note("Tap Allow to let a video through. It stays allowed even if the rules change."))
-        hiddenList = column()
-        page.addView(hiddenList)
-
-        page.addView(heading("Your choices"))
-        choicesList = column()
-        page.addView(choicesList)
-        refreshLists()
-
-        page.addView(heading("More"))
-        page.addView(button("Change PIN") { askNewPin(firstTime = false) })
-        page.addView(button("Forget all AI decisions") {
-            io.execute { store.clearDecisions() }
-            prefs.bumpVersion()
-            toast("Every video will be checked again")
-            refreshListsLater()
-        })
-
-        setContentView(ScrollView(this).apply { addView(page) })
-    }
-
-    private fun refreshProviderFields() {
-        val type = selectedProvider()
-        aiFields.visibility = if (type == ProviderType.NONE) View.GONE else View.VISIBLE
-        baseUrlRow.visibility = if (type == ProviderType.OPENAI_COMPATIBLE) View.VISIBLE else View.GONE
-        accountId.visibility = if (type == ProviderType.CLEF) View.VISIBLE else View.GONE
-        thumbs.visibility = if (type == ProviderType.ANTHROPIC || type == ProviderType.OPENAI_COMPATIBLE) View.VISIBLE else View.GONE
-        apiKey.hint = when (type) {
-            ProviderType.CLEF -> "Cloudflare API token (Workers AI)"
-            ProviderType.JEV -> "OpenRouter API key"
-            else -> "API key"
-        }
-        model.hint = when (type) {
-            ProviderType.CLEF -> "Model (default ${ProviderConfig.DEFAULT_CLEF_MODEL}; clef-flash is even faster)"
-            ProviderType.JEV -> "Model (default ${ProviderConfig.DEFAULT_JEV_MODEL})"
-            ProviderType.ANTHROPIC -> "Model (default ${ProviderConfig.DEFAULT_ANTHROPIC_MODEL})"
-            else -> "Model, e.g. gpt-4o-mini or llava"
-        }
-    }
-
-    private fun refreshHelperFields() {
-        val type = selectedHelper()
-        helperFields.visibility = if (type == ProviderType.NONE) View.GONE else View.VISIBLE
-        helperBaseUrl.visibility = if (type == ProviderType.OPENAI_COMPATIBLE) View.VISIBLE else View.GONE
-        helperModel.hint = if (type == ProviderType.ANTHROPIC) "Model (default ${ProviderConfig.DEFAULT_ANTHROPIC_MODEL})" else "Model"
-    }
-
-    private fun selectedHelper(): ProviderType =
-        ProviderType.entries.firstOrNull { it.ordinal + 1 == helper.checkedRadioButtonId } ?: ProviderType.NONE
-
-    private fun selectedProvider(): ProviderType =
-        ProviderType.entries.firstOrNull { it.ordinal + 1 == provider.checkedRadioButtonId } ?: ProviderType.NONE
-
-    private fun selectedStrictness(): Strictness =
-        Strictness.entries.firstOrNull { it.ordinal + 1 == strictness.checkedRadioButtonId } ?: Strictness.STRICT
-
-    private fun save() {
-        prefs.rules = rules.text.toString().trim()
-        prefs.keywords = keywords.text.toString().trim()
-        prefs.strictness = selectedStrictness()
-        prefs.providerType = selectedProvider()
-        prefs.accountId = accountId.text.toString().trim()
-        prefs.apiKey = apiKey.text.toString().trim()
-        prefs.baseUrl = baseUrl.text.toString().trim()
-        prefs.model = model.text.toString().trim()
-        prefs.sendThumbnails = thumbs.isChecked
-        prefs.helperType = selectedHelper()
-        prefs.helperKey = helperKey.text.toString().trim()
-        prefs.helperBaseUrl = helperBaseUrl.text.toString().trim()
-        prefs.helperModel = helperModel.text.toString().trim()
-        prefs.hideShorts = hideShorts.isChecked
-        prefs.hideComments = hideComments.isChecked
-        prefs.kidsCanBlock = kidsCanBlock.isChecked
-        prefs.bumpVersion()
-        toast("Saved")
-    }
-
-    /** Runs the current rules against two example videos so the parent can see it working. */
-    private fun testAi() {
-        val config = ProviderConfig(
-            type = selectedProvider(),
-            apiKey = apiKey.text.toString().trim(),
-            baseUrl = baseUrl.text.toString().trim(),
-            model = model.text.toString().trim(),
-            accountId = accountId.text.toString().trim(),
-            sendThumbnails = false,
-        )
-        val ruleText = rules.text.toString()
-        testResult.text = "Checking…"
-        io.execute {
-            val message = try {
-                val classifier = Classifiers.create(config) ?: throw IllegalStateException("Pick a provider first")
-                val samples = listOf(
-                    VideoInfo("aaaaaaaaaaa", "Five Little Pumpkins | Halloween Song for Kids", "Super Simple Songs"),
-                    VideoInfo("bbbbbbbbbbb", "Wheels On The Bus | Kids Songs", "Super Simple Songs"),
-                )
-                val scores = classifier.classify(samples, ruleText).associateBy { it.id }
-                val strict = selectedStrictness()
-                samples.joinToString("\n") { v ->
-                    val s = scores[v.id]
-                    if (s == null) "• ${v.title}: no answer"
-                    else {
-                        val verdict = if (strict.verdictFor(s.p) == Verdict.BLOCK) "HIDDEN" else "shown"
-                        "• ${v.title}: $verdict (${(s.p * 100).toInt()}%, ${s.reason})"
-                    }
-                }
-            } catch (e: Exception) {
-                "Didn't work: ${e.message}"
-            }
-            main.post { testResult.text = message }
-        }
-    }
-
-    // ------------------------------------------------------------------ blocking videos and channels
-
-    /** When opened from a video or channel page, offer to block it in one tap. */
-    private fun addCurrentPageSection(page: LinearLayout) {
-        val url = intent.getStringExtra(EXTRA_CURRENT_URL) ?: return
-        val videoId = VideoLinks.videoId(url)
-        val channelRef = ChannelBlocklist.normalizeId(Uri.parse(url).path ?: "")
-        if (videoId == null && channelRef == null) return
-
-        page.addView(heading("Open right now"))
-        val label = note(videoId?.let { "Video $it" } ?: channelRef!!)
-        page.addView(label)
-        val buttons = column()
-        page.addView(buttons)
-
-        if (videoId == null) {
-            buttons.addView(button("Block this channel") { blockChannel(listOf(channelRef!!)) })
-            return
-        }
-        // Look up the title and channel so the parent sees what they're blocking.
-        io.execute {
-            val info = YouTubeOEmbed.fetch(videoId)
-            main.post {
-                if (info != null) label.text = "\u201c${info.title}\u201d from ${info.channel}"
-                buttons.addView(button("Block this video") { blockVideo(videoId, info?.title) })
-                if (info != null && info.channel.isNotBlank()) {
-                    buttons.addView(button("Block everything from ${info.channel}") {
-                        blockChannel(listOfNotNull(info.channelId.ifBlank { null }, info.channel))
-                    })
-                }
-            }
-        }
-    }
-
-    private fun blockFromInput() {
-        val text = blockInput.text.toString().trim()
-        if (text.isEmpty()) return
-        val videoId = if (ChannelBlocklist.isChannelLink(text)) null else VideoLinks.videoId(text)
-        if (videoId != null) {
-            io.execute {
-                val title = YouTubeOEmbed.fetch(videoId)?.title
-                main.post { blockVideo(videoId, title) }
-            }
-        } else {
-            blockChannel(listOfNotNull(ChannelBlocklist.parse(text)))
-        }
-        blockInput.setText("")
-    }
-
-    private fun blockVideo(id: String, title: String?) {
-        io.execute { store.setOverride(id, Verdict.BLOCK, title) }
-        prefs.bumpVersion()
-        toast("That video is now always hidden")
-        refreshListsLater()
-    }
-
-    /** Stores the handle and the display name, so the block works whichever one a page shows. */
-    private fun blockChannel(entries: List<String>) {
-        entries.forEach { prefs.addBlockedChannel(it) }
-        prefs.bumpVersion()
-        toast("Channel blocked")
-        refreshListsLater()
-    }
-
-    private fun suggestKeywords() {
-        val config = ProviderConfig(
-            type = selectedHelper(),
-            apiKey = helperKey.text.toString().trim(),
-            baseUrl = helperBaseUrl.text.toString().trim(),
-            model = helperModel.text.toString().trim(),
-        )
-        if (config.type == ProviderType.NONE) {
-            suggestResult.text = "Pick a keyword helper AI further down first (Gemini's free tier works)."
-            return
-        }
-        val ruleText = rules.text.toString()
-        val existing = KeywordFilter.parseList(keywords.text.toString())
-        suggestResult.text = "Thinking\u2026"
-        io.execute {
-            val result = try {
-                Result.success(KeywordSuggester(config).suggest(ruleText, existing))
-            } catch (e: Exception) {
-                Result.failure(e)
-            }
-            main.post {
-                result.onSuccess { added ->
-                    if (added.isEmpty()) {
-                        suggestResult.text = "No new keywords to add."
-                    } else {
-                        keywords.setText((existing + added).joinToString(", "))
-                        suggestResult.text = "Added ${added.size} keywords. Remove any you don't want, then Save."
-                    }
-                }.onFailure { suggestResult.text = "Didn't work: ${it.message}" }
-            }
-        }
-    }
-
-    // ------------------------------------------------------------------ hidden videos and overrides
-
-    private fun refreshListsLater() = main.postDelayed({ refreshLists() }, 300)
-
-    private fun refreshLists() {
-        io.execute {
-            val hidden = store.recentlyHidden()
+        @JavascriptInterface
+        fun lists(): String {
+            if (!allowed()) return "{}"
             val choices = store.parentChoices()
-            main.post {
-                hiddenList.removeAllViews()
-                if (hidden.isEmpty()) hiddenList.addView(note("Nothing hidden yet."))
-                hidden.forEach { h ->
-                    val why = buildString {
-                        append(h.reason.ifBlank { "Matched your rules" })
-                        h.score?.let { append(" · ").append((it * 100).toInt()).append('%') }
+            val byChild = choices.filter { it.verdict == Verdict.BLOCK && it.by == "child" }.map { it.id }.toSet()
+            return JSONObject()
+                .put(
+                    "stats", JSONObject()
+                        .put("checkedToday", prefs.checkedToday())
+                        .put("hiddenToday", store.hiddenSince(startOfToday()))
+                )
+                .put("hidden", JSONArray(store.recentlyHidden().map { h ->
+                    JSONObject().put("id", h.id).put("title", h.title).put("channel", h.channel)
+                        .put("reason", if (h.id in byChild) "Set by child" else h.reason)
+                }))
+                .put("blocked", JSONArray(choices.filter { it.verdict == Verdict.BLOCK }.map { c ->
+                    JSONObject().put("id", c.id).put("title", c.title).put("by", c.by)
+                }))
+                .put("allowed", JSONArray(choices.filter { it.verdict == Verdict.ALLOW }.map { c ->
+                    JSONObject().put("id", c.id).put("title", c.title)
+                }))
+                .put("channels", JSONArray(prefs.blockedChannelList()))
+                .toString()
+        }
+
+        @JavascriptInterface
+        fun checkPin(pin: String): Boolean = prefs.checkPin(pin).also { if (it) unlocked = true }
+
+        @JavascriptInterface
+        fun setPin(pin: String) {
+            // First-run setup, or a parent who already got past the PIN pad.
+            if (!allowed() || pin.length !in 4..8 || !pin.all { it.isDigit() }) return
+            prefs.setPin(pin)
+            unlocked = true
+        }
+
+        @JavascriptInterface
+        fun save(json: String) {
+            if (!allowed()) return
+            val o = JSONObject(json)
+            prefs.rules = o.optString("rules").trim()
+            val words = o.optJSONArray("keywords") ?: JSONArray()
+            prefs.keywords = (0 until words.length()).map { words.optString(it).trim() }.filter { it.isNotEmpty() }
+                .distinct().joinToString(", ")
+            prefs.strictness = enumOr(o.optString("strictness"), Strictness.STRICT)
+            o.optJSONObject("provider")?.let { p ->
+                prefs.providerType = enumOr(p.optString("type"), ProviderType.NONE)
+                prefs.accountId = p.optString("accountId").trim()
+                prefs.apiKey = p.optString("apiKey").trim()
+                prefs.baseUrl = p.optString("baseUrl").trim()
+                prefs.model = p.optString("model").trim()
+                prefs.sendThumbnails = p.optBoolean("sendThumbnails", true)
+            }
+            o.optJSONObject("helper")?.let { h ->
+                prefs.helperType = enumOr(h.optString("type"), ProviderType.NONE)
+                prefs.helperKey = h.optString("apiKey").trim()
+                prefs.helperBaseUrl = h.optString("baseUrl").trim()
+                prefs.helperModel = h.optString("model").trim()
+            }
+            prefs.hideShorts = o.optBoolean("hideShorts", true)
+            prefs.hideComments = o.optBoolean("hideComments", true)
+            prefs.kidsCanBlock = o.optBoolean("kidsCanBlock", true)
+            prefs.bumpVersion()
+        }
+
+        /** Slow work; the answer goes back to window.__parent.done(id, json). */
+        @JavascriptInterface
+        fun call(name: String, argsJson: String, id: Int) {
+            if (!allowed()) return
+            val args = try { JSONObject(argsJson) } catch (e: Exception) { JSONObject() }
+            io.execute {
+                val result = try {
+                    when (name) {
+                        "lookup" -> lookup(args.optString("id"))
+                        "suggest" -> suggest(args)
+                        "testAi" -> testAi()
+                        "blockLink" -> blockLink(args.optString("text"))
+                        else -> JSONObject().put("error", "Unknown request")
                     }
-                    hiddenList.addView(row(h.title.ifBlank { h.id }, listOf(h.channel, why).filter { it.isNotBlank() }.joinToString(" · "), "Allow") {
-                        io.execute { store.setOverride(h.id, Verdict.ALLOW, h.title) }
-                        prefs.bumpVersion()
-                        refreshListsLater()
-                    })
+                } catch (e: Exception) {
+                    JSONObject().put("error", e.message ?: e.toString())
                 }
-                channelsList.removeAllViews()
-                val channels = prefs.blockedChannelList()
-                if (channels.isEmpty()) channelsList.addView(note("None."))
-                channels.forEach { c ->
-                    channelsList.addView(row(c, "Every video hidden", "Remove") {
-                        prefs.removeBlockedChannel(c)
-                        prefs.bumpVersion()
-                        refreshListsLater()
-                    })
-                }
-                choicesList.removeAllViews()
-                if (choices.isEmpty()) choicesList.addView(note("You haven't allowed or blocked anything by hand."))
-                choices.forEach { c ->
-                    val label = if (c.verdict == Verdict.ALLOW) "Always allowed" else "Always hidden"
-                    choicesList.addView(row(c.title.ifBlank { c.id }, label, "Undo") {
-                        io.execute { store.setOverride(c.id, null) }
-                        prefs.bumpVersion()
-                        refreshListsLater()
-                    })
+                main.post {
+                    webView.evaluateJavascript("window.__parent.done($id, ${JSONObject.quote(result.toString())})", null)
                 }
             }
         }
-    }
 
-    // ------------------------------------------------------------------ small view helpers
+        @JavascriptInterface
+        fun allow(id: String, title: String) = changed { store.setOverride(id, Verdict.ALLOW, title.ifBlank { null }, by = "parent") }
 
-    private fun row(title: String, subtitle: String, action: String, onClick: () -> Unit): View =
-        LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(6), 0, dp(6))
-            val texts = column().apply {
-                addView(TextView(this@ParentActivity).apply { text = title; setTypeface(typeface, Typeface.BOLD) })
-                addView(TextView(this@ParentActivity).apply { text = subtitle; alpha = 0.7f; textSize = 13f })
-            }
-            addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(Button(this@ParentActivity).apply { text = action; setOnClickListener { onClick() } })
+        @JavascriptInterface
+        fun undo(id: String) = changed { store.setOverride(id, null) }
+
+        @JavascriptInterface
+        fun blockVideo(id: String, title: String) {
+            if (VideoInfo.isValidId(id)) changed { store.setOverride(id, Verdict.BLOCK, title.ifBlank { null }, by = "parent") }
         }
 
-    private fun column() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        @JavascriptInterface
+        fun blockChannel(entriesJson: String) {
+            val entries = JSONArray(entriesJson)
+            changed { (0 until entries.length()).map { entries.optString(it).trim() }.filter { it.isNotEmpty() }.forEach(prefs::addBlockedChannel) }
+        }
 
-    private fun heading(text: String) = TextView(this).apply {
-        this.text = text
-        textSize = 18f
-        setTypeface(typeface, Typeface.BOLD)
-        setPadding(0, dp(20), 0, dp(4))
+        @JavascriptInterface
+        fun unblockChannel(entry: String) = changed { prefs.removeBlockedChannel(entry) }
+
+        @JavascriptInterface
+        fun forgetAi() = changed { store.clearDecisions() }
+
+        @JavascriptInterface
+        fun openLink(url: String) {
+            if (!url.startsWith("https://")) return
+            main.post {
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                } catch (e: Exception) {
+                    // No browser on the tablet (or it's blocked); nothing to do.
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun finishSetup() = main.post { finish() }
+
+        @JavascriptInterface
+        fun close() = main.post { finish() }
+
+        /** The PIN was right for a hide request from the YouTube screen. */
+        @JavascriptInterface
+        fun confirmBlock() = main.post {
+            if (mode == "block") setResult(RESULT_OK, Intent().putExtra(EXTRA_BLOCK, intent.getStringExtra(EXTRA_BLOCK)))
+            finish()
+        }
     }
 
-    private fun note(text: String) = TextView(this).apply {
-        this.text = text
-        alpha = 0.75f
-        textSize = 14f
+    /** Nothing can be read or changed before the PIN is entered, except during first-run setup. */
+    private fun allowed() = unlocked || !prefs.hasPin
+
+    /** Applies a change and tells open YouTube pages to re-check what they show. */
+    private fun changed(block: () -> Unit) {
+        if (!allowed()) return
+        block()
+        prefs.bumpVersion()
     }
 
-    /** Radio ids are the enum ordinal + 1 (0 isn't a usable view id). */
-    private fun radio(label: String, id: Int, checked: Boolean) = RadioButton(this).apply {
-        text = label
-        this.id = id
-        isChecked = checked
+    private fun settingsJson() = JSONObject()
+        .put("rules", prefs.rules)
+        .put("keywords", JSONArray(KeywordFilter.parseList(prefs.keywords)))
+        .put("strictness", prefs.strictness.name)
+        .put(
+            "provider", JSONObject()
+                .put("type", prefs.providerType.name)
+                .put("accountId", prefs.accountId)
+                .put("apiKey", prefs.apiKey)
+                .put("baseUrl", prefs.baseUrl)
+                .put("model", prefs.model)
+                .put("sendThumbnails", prefs.sendThumbnails)
+        )
+        .put(
+            "helper", JSONObject()
+                .put("type", prefs.helperType.name)
+                .put("apiKey", prefs.helperKey)
+                .put("baseUrl", prefs.helperBaseUrl)
+                .put("model", prefs.helperModel)
+        )
+        .put("hideShorts", prefs.hideShorts)
+        .put("hideComments", prefs.hideComments)
+        .put("kidsCanBlock", prefs.kidsCanBlock)
+
+    /** The video or channel that was open when the parent came in, if any. */
+    private fun currentPage(): Any {
+        val url = intent.getStringExtra(EXTRA_CURRENT_URL) ?: return JSONObject.NULL
+        val videoId = VideoLinks.videoId(url)
+        val channelRef = if (videoId == null) ChannelBlocklist.normalizeId(Uri.parse(url).path ?: "") else null
+        if (videoId == null && channelRef == null) return JSONObject.NULL
+        return JSONObject().put("videoId", videoId ?: JSONObject.NULL).put("channelRef", channelRef ?: JSONObject.NULL)
     }
 
-    private fun button(label: String, onClick: () -> Unit) = Button(this).apply {
-        text = label
-        setOnClickListener { onClick() }
+    private fun lookup(id: String): JSONObject {
+        val info = if (VideoInfo.isValidId(id)) YouTubeOEmbed.fetch(id) else null
+        return JSONObject()
+            .put("title", info?.title ?: "")
+            .put("channel", info?.channel ?: "")
+            .put("channelId", info?.channelId ?: "")
     }
 
-    private fun pinField() = EditText(this).apply {
-        inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
-        hint = "PIN"
+    private fun suggest(args: JSONObject): JSONObject {
+        val h = args.optJSONObject("helper") ?: JSONObject()
+        val config = ProviderConfig(
+            type = enumOr(h.optString("type"), ProviderType.NONE),
+            apiKey = h.optString("apiKey").trim(),
+            baseUrl = h.optString("baseUrl").trim(),
+            model = h.optString("model").trim(),
+        )
+        if (config.type == ProviderType.NONE) return JSONObject().put("error", "Set up the keyword helper first.")
+        val words = args.optJSONArray("keywords") ?: JSONArray()
+        val existing = (0 until words.length()).map { words.optString(it) }
+        val added = KeywordSuggester(config).suggest(args.optString("rules"), existing)
+        return JSONObject().put("keywords", JSONArray(added))
     }
 
-    private fun padded(v: View) = LinearLayout(this).apply {
-        setPadding(dp(24), dp(8), dp(24), 0)
-        addView(v, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+    /** Runs the saved rules against two example videos so the parent can see it working. */
+    private fun testAi(): JSONObject {
+        val settings = prefs.filterSettings()
+        val classifier = Classifiers.create(settings.provider.copy(sendThumbnails = false))
+            ?: return JSONObject().put("error", "Pick a checker first.")
+        val samples = listOf(
+            VideoInfo("aaaaaaaaaaa", "Five Little Pumpkins | Halloween Song for Kids", "Sing Along Street"),
+            VideoInfo("bbbbbbbbbbb", "Counting to 20 with Building Blocks", "Number Garden"),
+        )
+        val scores = classifier.classify(samples, settings.rules).associateBy { it.id }
+        return JSONObject().put("results", JSONArray(samples.map { v ->
+            val s = scores[v.id]
+            JSONObject()
+                .put("title", v.title)
+                .put("hidden", s != null && settings.strictness.verdictFor(s.p) == Verdict.BLOCK)
+                .put("reason", s?.reason ?: "No answer")
+        }))
     }
 
-    private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+    /** A pasted video link hides that video; a channel link, @handle or name hides the channel. */
+    private fun blockLink(text: String): JSONObject {
+        val t = text.trim()
+        val videoId = if (ChannelBlocklist.isChannelLink(t)) null else VideoLinks.videoId(t)
+        if (videoId != null) {
+            val title = YouTubeOEmbed.fetch(videoId)?.title
+            changed { store.setOverride(videoId, Verdict.BLOCK, title, by = "parent") }
+            return JSONObject().put("ok", true).put("message", "${title?.let { "“$it”" } ?: "That video"} is now always hidden.")
+        }
+        val channel = ChannelBlocklist.parse(t)
+            ?: return JSONObject().put("ok", false).put("message", "That doesn’t look like a YouTube video or channel.")
+        changed { prefs.addBlockedChannel(channel) }
+        return JSONObject().put("ok", true).put("message", "$channel is now hidden.")
+    }
 
-    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+    private fun appVersion(): String = try {
+        packageManager.getPackageInfo(packageName, 0).versionName ?: ""
+    } catch (e: Exception) {
+        ""
+    }
+
+    private fun startOfToday(): Long = java.util.Calendar.getInstance().apply {
+        set(java.util.Calendar.HOUR_OF_DAY, 0)
+        set(java.util.Calendar.MINUTE, 0)
+        set(java.util.Calendar.SECOND, 0)
+        set(java.util.Calendar.MILLISECOND, 0)
+    }.timeInMillis
+
+    private inline fun <reified T : Enum<T>> enumOr(name: String?, default: T): T =
+        enumValues<T>().firstOrNull { it.name == name } ?: default
 
     companion object {
         const val EXTRA_SETUP = "setup"
         const val EXTRA_CURRENT_URL = "currentUrl"
+        /** JSON of a hide request from the YouTube screen that needs the parent's PIN. */
+        const val EXTRA_BLOCK = "block"
+        private const val PAGE_URL = "https://appassets.androidplatform.net/assets/parent/index.html"
     }
 }

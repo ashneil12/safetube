@@ -34,6 +34,7 @@ jobs:
       - run: npm install
       - run: npx playwright install --with-deps chromium
       - run: node run.js
+      - run: node ../parent-test/run.js
 
   apk:
     runs-on: ubuntu-latest

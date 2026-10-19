@@ -9,3 +9,4 @@ local.properties
 *.jks
 tools/filter-test/node_modules/
 tools/filter-test/screenshots/
+tools/parent-test/screenshots/
