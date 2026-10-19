@@ -101,47 +101,31 @@
     if (cfg.hideShorts) rules.push(SHORTS_SEL + '{display:none!important}');
     if (cfg.hideComments) rules.push(COMMENTS_SEL + '{display:none!important}');
     rules.push(
-      // SafeTube's own screens, in the app's colours (navy, teal, sunflower).
+      // SafeTube's few screens copy YouTube's own look so they blend in.
       '#st-overlay{position:fixed;inset:0;z-index:2147483647;display:flex;flex-direction:column;' +
-      'align-items:center;justify-content:center;gap:16px;background:#14182B;color:#fff;' +
-      'font:16px/1.45 Roboto,Arial,sans-serif;text-align:center;padding:24px}' +
-      '#st-overlay .st-badge{width:96px;height:96px;border-radius:48px;background:#2A3150;display:flex;' +
-      'align-items:center;justify-content:center;color:#FFC845}' +
-      '#st-overlay .st-badge svg{width:44px;height:44px}' +
-      '#st-overlay .st-h{font-size:30px;font-weight:700;letter-spacing:-.01em;line-height:1.15}' +
-      '#st-overlay .st-p{font-size:18px;color:#C9CEDD;max-width:440px}' +
-      '#st-overlay button{font:inherit;font-weight:700;font-size:17px;height:52px;padding:0 28px;border-radius:26px;' +
-      'border:0;background:#FFC845;color:#14182B;display:inline-flex;align-items:center;gap:10px;margin-top:8px}' +
-      '#st-overlay button svg{width:18px;height:18px}' +
-      '#st-overlay .st-spin{width:48px;height:48px;border-radius:50%;border:4px solid #2A3150;border-top-color:#FFC845;' +
+      'align-items:center;justify-content:center;gap:12px;background:#0f0f0f;color:#fff;' +
+      'font:14px/1.4 Roboto,Arial,sans-serif;text-align:center;padding:24px}' +
+      '#st-overlay svg{width:56px;height:56px;color:#aaa}' +
+      '#st-overlay .st-h{font-size:18px;font-weight:500}' +
+      '#st-overlay .st-p{color:#aaa}' +
+      '#st-overlay button{font:500 14px Roboto,Arial,sans-serif;height:36px;padding:0 16px;border-radius:18px;' +
+      'border:0;background:#f1f1f1;color:#0f0f0f;margin-top:8px}' +
+      '#st-overlay .st-spin{width:36px;height:36px;border-radius:50%;border:3px solid #3f3f3f;border-top-color:#fff;' +
       'animation:st-spin .9s linear infinite}' +
       '@keyframes st-spin{to{transform:rotate(360deg)}}' +
-      // Hold-to-hide menu
-      '#st-sheet-bg{position:fixed;inset:0;z-index:2147483646;background:rgba(12,15,30,.62)}' +
-      '#st-sheet{position:fixed;left:0;right:0;bottom:0;z-index:2147483647;background:#fff;color:#14182B;' +
-      'border-radius:28px 28px 0 0;padding:14px 24px 22px;font:16px/1.4 Roboto,Arial,sans-serif;' +
-      'max-width:560px;margin:0 auto;box-shadow:0 -12px 40px rgba(12,15,30,.25);box-sizing:border-box}' +
-      '#st-sheet .st-handle{width:44px;height:5px;border-radius:3px;background:#D5D9E4;margin:0 auto 16px}' +
-      '#st-sheet .st-video{display:flex;align-items:center;gap:14px;padding-bottom:16px;margin-bottom:14px;' +
-      'border-bottom:1px solid #E3E7EF}' +
-      '#st-sheet .st-video img{width:112px;height:63px;border-radius:10px;object-fit:cover;flex:none;background:#F3F5F9}' +
-      '#st-sheet .st-title{font-weight:700;font-size:17px;overflow:hidden;display:-webkit-box;' +
-      '-webkit-line-clamp:2;-webkit-box-orient:vertical}' +
-      '#st-sheet .st-channel{font-size:14px;color:#5B6178;margin-top:3px}' +
-      '#st-sheet button{display:flex;align-items:center;gap:14px;width:100%;text-align:left;font:inherit;font-size:17px;' +
-      'font-weight:700;min-height:60px;padding:0 16px;border:0;background:#F3F5F9;color:#14182B;border-radius:16px;' +
-      'margin-top:10px;box-sizing:border-box}' +
-      '#st-sheet button:active{background:#E3E7EF}' +
-      '#st-sheet .st-ic{width:36px;height:36px;border-radius:12px;background:#FDE8E6;color:#C23B2E;flex:none;' +
-      'display:flex;align-items:center;justify-content:center}' +
-      '#st-sheet .st-ic svg{width:20px;height:20px}' +
-      '#st-sheet button.st-cancel{justify-content:center;background:none;font-weight:500;font-size:16px;color:#5B6178;min-height:52px}' +
-      '#st-sheet .st-foot{display:flex;align-items:center;justify-content:center;gap:8px;font-size:14px;color:#5B6178}' +
-      '#st-sheet .st-foot svg{width:16px;height:16px}' +
-      '#st-block-btn{position:fixed;left:12px;bottom:72px;z-index:2147483645;height:44px;padding:0 16px 0 12px;' +
-      'border-radius:22px;border:0;background:rgba(20,24,43,.82);color:#fff;font:700 15px Roboto,Arial,sans-serif;' +
-      'display:flex;align-items:center;gap:8px}' +
-      '#st-block-btn svg{width:20px;height:20px}'
+      // Hold menu, like YouTube's own bottom sheet
+      '#st-sheet-bg{position:fixed;inset:0;z-index:2147483646;background:rgba(0,0,0,.6)}' +
+      '#st-sheet{position:fixed;left:0;right:0;bottom:0;z-index:2147483647;background:#fff;color:#0f0f0f;' +
+      'border-radius:12px 12px 0 0;padding:8px 0;font:16px/1.4 Roboto,Arial,sans-serif;' +
+      'max-width:560px;margin:0 auto;box-sizing:border-box}' +
+      '#st-sheet .st-handle{width:40px;height:4px;border-radius:2px;background:#ccc;margin:4px auto 8px}' +
+      '#st-sheet button{display:flex;align-items:center;gap:24px;width:100%;text-align:left;font:inherit;' +
+      'min-height:48px;padding:0 24px;border:0;background:none;color:inherit;box-sizing:border-box}' +
+      '#st-sheet button:active{background:rgba(0,0,0,.1)}' +
+      '#st-sheet button svg{width:24px;height:24px;flex:none}' +
+      '#st-sheet button.st-cancel{justify-content:center;margin-top:4px;border-top:1px solid rgba(0,0,0,.1)}' +
+      '@media (prefers-color-scheme:dark){#st-sheet{background:#212121;color:#f1f1f1}' +
+      '#st-sheet button:active{background:rgba(255,255,255,.1)}#st-sheet button.st-cancel{border-top-color:rgba(255,255,255,.1)}}'
     );
     return rules.join('\n');
   }
@@ -313,17 +297,14 @@
     if (!id) {
       html.setAttribute('data-st-watch', 'allow');
       removeOverlay();
-      showBlockButton(false);
       return;
     }
     var v = verdicts[id];
     if (v === 'allow') {
       if (html.getAttribute('data-st-watch') !== 'allow') html.setAttribute('data-st-watch', 'allow');
       removeOverlay();
-      showBlockButton(true);
       return;
     }
-    showBlockButton(false);
     html.setAttribute('data-st-watch', v === 'block' ? 'block' : 'pending');
     pauseAll();
     if (v === 'block') showBlocked(id);
@@ -353,11 +334,9 @@
 
   // Small stroke icons, built with DOM calls because YouTube's page forbids innerHTML.
   var ICONS = {
-    shield: ['M12 3l8 3v6c0 5-3.4 8.6-8 10-4.6-1.4-8-5-8-10V6z', 'M9 12l2 2 4-4'],
-    home: ['M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z'],
+    unavailable: ['M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18z', 'M12 8v5', 'M12 16h.01'],
     eyeoff: ['M3 3l18 18', 'M10.6 5.1A10.7 10.7 0 0 1 12 5c6 0 9.5 7 9.5 7a17.6 17.6 0 0 1-3 3.9M6.6 6.6C3.9 8.4 2.5 12 2.5 12S6 19 12 19c1.9 0 3.6-.7 5-1.6', 'M9.9 9.9a3 3 0 0 0 4.2 4.2'],
     ban: ['M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18z', 'M5.6 5.6l12.8 12.8'],
-    lock: ['M7 11h10a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2z', 'M8 11V8a4 4 0 0 1 8 0v3'],
     retry: ['M3 12a9 9 0 0 1 15.5-6.2L21 8', 'M21 3v5h-5', 'M21 12a9 9 0 0 1-15.5 6.2L3 16', 'M3 21v-5h5']
   };
   function svgIcon(name) {
@@ -366,7 +345,7 @@
     svg.setAttribute('viewBox', '0 0 24 24');
     svg.setAttribute('fill', 'none');
     svg.setAttribute('stroke', 'currentColor');
-    svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('stroke-width', '1.6');
     svg.setAttribute('stroke-linecap', 'round');
     svg.setAttribute('stroke-linejoin', 'round');
     svg.setAttribute('aria-hidden', 'true');
@@ -397,18 +376,14 @@
     box.textContent = '';
     if (kind === 'checking') {
       box.appendChild(el('div', 'st-spin'));
-      box.appendChild(el('div', 'st-p', 'Just checking this one…'));
+      box.appendChild(el('div', 'st-p', 'Loading…'));
       return;
     }
-    var badge = el('div', 'st-badge');
-    badge.appendChild(svgIcon(kind === 'error' ? 'retry' : 'shield'));
-    box.appendChild(badge);
-    box.appendChild(el('div', 'st-h', kind === 'error' ? "This one couldn't be checked" : "This one isn't available"));
-    box.appendChild(el('div', 'st-p', kind === 'error' ? 'Try again in a moment, or pick something else.'
-      : 'Let’s find something else to watch.'));
-    var b = el('button');
-    b.appendChild(svgIcon('home'));
-    b.appendChild(document.createTextNode('Back to videos'));
+    box.appendChild(svgIcon(kind === 'error' ? 'retry' : 'unavailable'));
+    box.appendChild(el('div', 'st-h', 'Video unavailable'));
+    box.appendChild(el('div', 'st-p', kind === 'error' ? "This video couldn't be checked. Try again in a moment."
+      : "This video isn't available."));
+    var b = el('button', '', 'Go back');
     b.addEventListener('click', goBack);
     box.appendChild(b);
   }
@@ -438,6 +413,7 @@
 
   function videoUnder(target) {
     if (!target || !target.closest) return null;
+    if (target.closest(WATCH_INFO_SEL)) return currentVideo();
     var card = target.closest(CARD_SEL);
     var link = card ? cardVideoLink(card) : target.closest(VIDEO_LINK_SEL);
     var id = link ? idFromUrl(link.getAttribute('href')) : null;
@@ -445,7 +421,11 @@
     return describe(card || link, link, id);
   }
 
-  /** The video on the watch page, for the block button. */
+  // The title and channel under the player; holding them hides the video that's playing.
+  var WATCH_INFO_SEL = 'ytm-slim-video-metadata-section-renderer, ytm-slim-owner-renderer, .slim-video-information-renderer, ' +
+    'ytd-watch-metadata, #owner, #above-the-fold';
+
+  /** The video on the watch page, for the hold menu. */
   function currentVideo() {
     var id = currentWatchId();
     if (!id) return null;
@@ -519,26 +499,11 @@
     sheet.setAttribute('role', 'dialog');
     sheet.setAttribute('aria-label', 'Hide this video');
     sheet.appendChild(el('div', 'st-handle'));
-
     var channelName = (video.channel || '').split(/\s+[·•]\s+/)[0];
-    var head = el('div', 'st-video');
-    var img = document.createElement('img');
-    img.alt = '';
-    img.src = 'https://i.ytimg.com/vi/' + video.id + '/mqdefault.jpg';
-    head.appendChild(img);
-    var text = el('div');
-    text.appendChild(el('div', 'st-title', video.title || 'This video'));
-    if (channelName) text.appendChild(el('div', 'st-channel', channelName));
-    head.appendChild(text);
-    sheet.appendChild(head);
 
     function option(label, iconName, cls, onTap) {
       var b = el('button', cls);
-      if (iconName) {
-        var ic = el('span', 'st-ic');
-        ic.appendChild(svgIcon(iconName));
-        b.appendChild(ic);
-      }
+      if (iconName) b.appendChild(svgIcon(iconName));
       b.appendChild(document.createTextNode(label));
       b.addEventListener('click', function (e) {
         e.preventDefault();
@@ -552,11 +517,6 @@
     option(channelName ? 'Hide everything from ' + channelName : 'Hide this channel', 'ban', '',
       function () { requestBlock('channel', { id: video.id, title: video.title, channel: channelName, channelId: video.channelId }); });
     option('Cancel', null, 'st-cancel', null);
-    var foot = el('div', 'st-foot');
-    foot.appendChild(svgIcon('lock'));
-    foot.appendChild(document.createTextNode(cfg.kidsCanBlock === false
-      ? 'A grown-up will need to enter the PIN.' : 'Only a grown-up can bring it back.'));
-    sheet.appendChild(foot);
     parent.appendChild(bg);
     parent.appendChild(sheet);
   }
@@ -570,24 +530,6 @@
     } else if (window.__safetubeTestBlock) {
       window.__safetubeTestBlock(JSON.parse(req));
     }
-  }
-
-  function showBlockButton(show) {
-    var btn = document.getElementById('st-block-btn');
-    if (!show || !cfg.blockMenu) { if (btn) btn.remove(); return; }
-    if (btn) return;
-    btn = document.createElement('button');
-    btn.id = 'st-block-btn';
-    btn.setAttribute('aria-label', 'Hide this video or channel');
-    btn.appendChild(svgIcon('eyeoff'));
-    btn.appendChild(document.createTextNode('Hide'));
-    btn.addEventListener('click', function (e) {
-      e.preventDefault();
-      e.stopPropagation();
-      var v = currentVideo();
-      if (v) openSheet(v);
-    });
-    (document.body || document.documentElement).appendChild(btn);
   }
 
   // Stop taps on blocked or unchecked videos before YouTube's own handlers run,

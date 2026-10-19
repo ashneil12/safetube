@@ -21,13 +21,13 @@ rules simply aren't there.
   thumbnail against your plain-English rules.
 - **Direct links and autoplay are checked too.** If a video opens some other way (a shared
   link, "up next", autoplay), the player stays hidden and paused until the video is checked.
-  Blocked videos show "This one isn't available" with a button back to the videos.
+  Blocked videos show YouTube's usual "Video unavailable" screen.
 - **Decisions are remembered.** Each video is checked once per set of rules and cached on
   the device, so it costs almost nothing after the first few days.
 - **Strict / Balanced / Relaxed.** Strict (the default) hides anything the AI isn't fairly
   sure is fine.
-- **Hold to hide.** Hold any video (or tap Hide while one is playing) and choose "Hide this
-  video" or "Hide everything from" its channel. By default children can do this themselves,
+- **Hold to hide.** Hold any video (or the title of the one playing) and choose "Hide this
+  video" or "Hide everything from" its channel, in a menu that looks like YouTube's own. By default children can do this themselves,
   since hiding has no downside; only a parent can bring it back. Turn that off and hiding asks
   for the PIN.
 - **Hide by link too.** In parent settings, paste a video link, a channel link, an @handle or

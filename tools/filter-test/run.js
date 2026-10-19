@@ -135,7 +135,7 @@ function check(name, cond) {
   check('player hidden on a blocked video', (await vis('#player')) === 'hidden');
   const blockedText = await page.$eval('#st-overlay', (el) => el.textContent).catch(() => '');
   check('blocked video shows "isn\'t available"', blockedText.includes("isn't available"));
-  check('blocked screen offers a way back', blockedText.includes('Back to videos'));
+  check('blocked screen offers a way back', blockedText.includes('Go back'));
   if (SHOTS) await page.screenshot({ path: path.join(__dirname, 'screenshots/4-blocked.png') });
 
   await page.evaluate(() => history.pushState({}, '', '/watch?v=FRESHVIDEO1'));
@@ -156,10 +156,10 @@ function check(name, cond) {
   check('player shown once the video is allowed', (await vis('#player')) === 'visible');
   check('overlay removed once allowed', (await page.$('#st-overlay')) === null);
 
-  // 9. Hold-to-block menu.
-  check('block button shows on an allowed video', (await page.$('#st-block-btn')) !== null);
-  await page.click('#st-block-btn');
-  check('block button opens the menu', (await page.$('#st-sheet')) !== null);
+  // 9. Hold menu. Nothing extra shows on the watch page; holding the title opens the menu.
+  check('no extra buttons on the watch page', (await page.$('#st-block-btn')) === null);
+  await page.dispatchEvent('#watchinfo', 'contextmenu');
+  check('holding the playing video\'s title opens the menu', (await page.$('#st-sheet')) !== null);
   await page.click('#st-sheet >> text=Hide this video');
   let blocks = await page.evaluate(() => window.__blocks.splice(0));
   check('"Hide this video" asks the app to block the playing video',
@@ -168,10 +168,8 @@ function check(name, cond) {
 
   await page.evaluate(() => history.pushState({}, '', '/'));
   await page.waitForTimeout(100);
-  check('block button hidden off the watch page', (await page.$('#st-block-btn')) === null);
   await page.dispatchEvent('#card-WHEELSBUS01 h3', 'contextmenu');
   const sheetText = await page.$eval('#st-sheet', (el) => el.textContent).catch(() => '');
-  check('long-press on a video opens the menu with its title', sheetText.includes('Wheels On The Bus'));
   check('menu names the channel', sheetText.includes('Hide everything from Super Simple Songs'));
   if (SHOTS) await page.screenshot({ path: path.join(__dirname, 'screenshots/3-hold-menu.png') });
   const leaked = await page.evaluate(() => {
