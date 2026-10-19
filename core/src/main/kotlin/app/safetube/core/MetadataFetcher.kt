@@ -16,7 +16,12 @@ object YouTubeOEmbed : MetadataFetcher {
             val r = Http.request("https://www.youtube.com/oembed?format=json&url=$watch", timeoutMs = 10_000)
             if (r.code != 200) return null
             val json = JSONObject(r.body)
-            VideoInfo(id = id, title = json.optString("title"), channel = json.optString("author_name"))
+            VideoInfo(
+                id = id,
+                title = json.optString("title"),
+                channel = json.optString("author_name"),
+                channelId = ChannelBlocklist.normalizeId(json.optString("author_url")) ?: "",
+            )
         } catch (e: Exception) {
             null
         }

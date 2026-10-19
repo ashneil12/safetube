@@ -241,7 +241,11 @@ class MainActivity : Activity() {
         alpha = 0.35f
         contentDescription = "Parent settings (hold)"
         val open = Runnable {
-            startActivity(Intent(this@MainActivity, ParentActivity::class.java))
+            // Pass the page that's open so the parent can block that video or channel in one tap.
+            startActivity(
+                Intent(this@MainActivity, ParentActivity::class.java)
+                    .putExtra(ParentActivity.EXTRA_CURRENT_URL, webView.url)
+            )
         }
         setOnTouchListener { v, e ->
             when (e.actionMasked) {

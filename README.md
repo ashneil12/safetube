@@ -26,6 +26,10 @@ rules simply aren't there.
   the device, so it costs almost nothing after the first few days.
 - **Strict / Balanced / Relaxed.** Strict (the default) hides anything the AI isn't fairly
   sure is fine.
+- **Block one video or a whole channel.** Paste a link, or open the settings while a video or
+  channel is on screen and tap "Block this video" / "Block everything from this channel".
+- **AI-written keyword lists.** Describe what you don't want and a chat model (Gemini's free
+  tier works) suggests every keyword it can think of. You review the list before saving.
 - **You stay in charge.** A parent PIN protects the settings. The "Recently hidden" list
   shows what was hidden and why, with an Allow button for mistakes.
 - **Extras on by default:** Shorts hidden, comments hidden, ads hidden, links to other
@@ -45,17 +49,27 @@ is ever sent to the AI. SafeTube never sees any other traffic on the device.
 
 ## Choosing an AI (optional)
 
-Without an AI the keyword list still works, fully offline. To use plain-English rules, hold
-the faint 🔒 in the top corner for two seconds, enter your PIN, and pick a provider:
+Without an AI, the keyword list and your blocked videos and channels still work, fully
+offline. Hold the faint 🔒 in the top corner for two seconds, enter your PIN, and set up
+one or both of these:
 
-| Provider | What to enter |
-| --- | --- |
-| Claude (Anthropic) | An API key from console.anthropic.com. Default model: `claude-haiku-5-5`. |
-| OpenAI-compatible | Base URL + model + key. Works with OpenRouter (`https://openrouter.ai/api/v1`), OpenAI (`https://api.openai.com/v1`), Groq, Together, or a local Ollama / LM Studio server on your home network (`http://192.168.x.x:11434/v1`). |
+**Video checker** decides each video against your rules. Decision models are built for
+exactly this kind of yes/no question and answer in a fraction of a second.
+
+| Provider | What to enter | Cost |
+| --- | --- | --- |
+| **Clef** by Cloudflare (recommended) | Your Cloudflare account ID and an API token with Workers AI permission (dash.cloudflare.com → AI → Workers AI → Use REST API). Model `clef`, or `clef-flash` for speed. | Workers AI includes 10,000 free "neurons" a day on the free plan, enough for several thousand video checks by our estimate (videos are checked in batches and cached). Then $0.24 per million input tokens. |
+| **Jev** by TypeSafe, via OpenRouter | An OpenRouter API key. Model `typesafe/jev-1.14`. | $0.042 per million input tokens, so pennies, but OpenRouter needs credit. No free tier. |
+| Claude (Anthropic) | An API key from console.anthropic.com. Default `claude-haiku-5-5`. Can also look at thumbnails. | Paid per use. |
+| OpenAI-compatible | Base URL + model + key: OpenAI, Gemini, Groq, OpenRouter chat models, or Ollama on your home network. Can also look at thumbnails. | Depends on provider. |
+
+**Keyword helper** turns your rules into a long keyword list. It only ever sees your rules.
+Tap "Use Gemini (free tier)" and paste a key from aistudio.google.com, or use Claude or any
+OpenAI-compatible model.
 
 Use **Test the AI** to see how your rules treat a Halloween song and a normal song.
 
-Keys stay on the tablet and are sent only to the provider you chose. Never put your own key
+Keys stay on the tablet and are sent only to the providers you chose. Never put your own key
 into an APK you share with other people.
 
 ## Building it yourself
@@ -86,7 +100,7 @@ from a different machine.
 
 | Path | What it is |
 | --- | --- |
-| `core/` | The filtering engine in plain Kotlin: keyword matching, the `VideoClassifier` interface, Anthropic and OpenAI-compatible providers, caching rules and strictness. No Android code, so a browser extension or TV app can reuse the same logic. |
+| `core/` | The filtering engine in plain Kotlin: channel and keyword blocking, the `VideoClassifier` interface with Clef, Jev, Anthropic and OpenAI-compatible providers, keyword suggestions, caching rules and strictness. No Android code, so a browser extension or TV app can reuse the same logic. |
 | `app/src/main/assets/filter.js` | The script that runs inside YouTube pages: hides unchecked videos, sends them to the app, applies decisions, guards the player. |
 | `app/src/main/java/app/safetube/` | The Android app: WebView, PIN-protected parent settings, SQLite decision cache. |
 | `tools/filter-test/` | Headless-browser tests for `filter.js` against a mock YouTube page. |

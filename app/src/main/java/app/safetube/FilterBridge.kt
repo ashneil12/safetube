@@ -7,6 +7,7 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import app.safetube.core.Decision
 import app.safetube.core.DecisionEngine
+import app.safetube.core.ChannelBlocklist
 import app.safetube.core.DecisionSource
 import app.safetube.core.Verdict
 import app.safetube.core.VideoInfo
@@ -67,6 +68,7 @@ class FilterBridge(
                 title = o.optString("title"),
                 channel = o.optString("channel"),
                 context = o.optString("context"),
+                channelId = ChannelBlocklist.normalizeId(o.optString("channelId")) ?: "",
             ).takeIf { VideoInfo.isValidId(it.id) }
         }
     } catch (e: Exception) {

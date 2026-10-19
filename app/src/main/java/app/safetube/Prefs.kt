@@ -42,6 +42,48 @@ class Prefs(context: Context) {
         get() = sp.getString("model", "") ?: ""
         set(v) = sp.edit().putString("model", v).apply()
 
+    var accountId: String
+        get() = sp.getString("accountId", "") ?: ""
+        set(v) = sp.edit().putString("accountId", v).apply()
+
+    /** One entry per line: "@handle", "UC..." or a channel name. */
+    var blockedChannels: String
+        get() = sp.getString("blockedChannels", "") ?: ""
+        set(v) = sp.edit().putString("blockedChannels", v).apply()
+
+    fun blockedChannelList(): List<String> = blockedChannels.lines().map { it.trim() }.filter { it.isNotEmpty() }
+
+    fun addBlockedChannel(entry: String) {
+        val list = blockedChannelList()
+        if (list.none { it.equals(entry, ignoreCase = true) }) blockedChannels = (list + entry).joinToString("\n")
+    }
+
+    fun removeBlockedChannel(entry: String) {
+        blockedChannels = blockedChannelList().filterNot { it.equals(entry, ignoreCase = true) }.joinToString("\n")
+    }
+
+    // ---- the chat model that suggests keywords from the rules (can differ from the video checker)
+
+    var helperType: ProviderType
+        get() = enumOr(sp.getString("helperType", null), ProviderType.NONE)
+        set(v) = sp.edit().putString("helperType", v.name).apply()
+
+    var helperKey: String
+        get() = sp.getString("helperKey", "") ?: ""
+        set(v) = sp.edit().putString("helperKey", v).apply()
+
+    var helperBaseUrl: String
+        get() = sp.getString("helperBaseUrl", GEMINI_BASE_URL) ?: ""
+        set(v) = sp.edit().putString("helperBaseUrl", v).apply()
+
+    var helperModel: String
+        get() = sp.getString("helperModel", GEMINI_MODEL) ?: ""
+        set(v) = sp.edit().putString("helperModel", v).apply()
+
+    fun helperConfig() = ProviderConfig(
+        type = helperType, apiKey = helperKey, baseUrl = helperBaseUrl, model = helperModel,
+    )
+
     var sendThumbnails: Boolean
         get() = sp.getBoolean("thumbs", true)
         set(v) = sp.edit().putBoolean("thumbs", v).apply()
@@ -82,12 +124,14 @@ class Prefs(context: Context) {
     fun filterSettings() = FilterSettings(
         rules = rules,
         blockedKeywords = KeywordFilter.parseList(keywords),
+        blockedChannels = blockedChannelList(),
         strictness = strictness,
         provider = ProviderConfig(
             type = providerType,
             apiKey = apiKey,
             baseUrl = baseUrl,
             model = model,
+            accountId = accountId,
             sendThumbnails = sendThumbnails,
         ),
     )
@@ -106,6 +150,8 @@ class Prefs(context: Context) {
             "Nothing involving witches, witchcraft, spells or potions, Halloween, ghosts, demons, " +
                 "zombies, skeletons, monsters meant to be scary, or anything occult or designed to frighten " +
                 "children. Ordinary fairy tales and silly cartoon fun are fine."
+        const val GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
+        const val GEMINI_MODEL = "gemini-2.5-flash"
         const val DEFAULT_KEYWORDS = "halloween, witch, witchcraft, ghost, zombie, demon, spooky, trick or treat"
     }
 }

@@ -3,11 +3,12 @@ package app.safetube.core
 /**
  * Decides, for each video, whether the child may see it. In order:
  *
- * 1. A parent's manual allow/block always wins.
- * 2. The keyword list hides matches instantly, offline.
- * 3. With no AI rules configured, everything else is allowed.
- * 4. A cached AI score for these exact rules is reused.
- * 5. Everything left is sent to the AI in batches.
+ * 1. A parent's manual allow/block for this exact video always wins.
+ * 2. Videos from channels the parent blocked are hidden.
+ * 3. The keyword list hides matches instantly, offline.
+ * 4. With no AI rules configured, everything else is allowed.
+ * 5. A cached AI score for these exact rules is reused.
+ * 6. Everything left is sent to the AI in batches.
  *
  * Anything that can't be decided comes back [Verdict.UNKNOWN], which the page keeps hidden.
  * This class is synchronous; call it off the main thread.
@@ -22,6 +23,7 @@ class DecisionEngine(
         val videos = input.filter { VideoInfo.isValidId(it.id) }.distinctBy { it.id }
         val decisions = LinkedHashMap<String, Decision>()
         val keywords = KeywordFilter(settings.blockedKeywords)
+        val channels = ChannelBlocklist(settings.blockedChannels)
         val aiOn = settings.provider.isAiEnabled && settings.rules.isNotBlank()
         val hash = settings.aiConfigHash()
         val needAi = ArrayList<VideoInfo>()
@@ -36,6 +38,11 @@ class DecisionEngine(
             val v = if (raw.title.isBlank()) metadata?.fetch(raw.id)?.mergeInto(raw) ?: raw else raw
             byId[v.id] = v
 
+            val channel = channels.match(v)
+            if (channel != null) {
+                decisions[v.id] = Decision(v.id, Verdict.BLOCK, DecisionSource.CHANNEL, reason = "Blocked channel: $channel")
+                continue
+            }
             val kw = keywords.firstMatch(v.allText)
             if (kw != null) {
                 decisions[v.id] = Decision(v.id, Verdict.BLOCK, DecisionSource.KEYWORD, reason = "Keyword: $kw")
@@ -50,7 +57,7 @@ class DecisionEngine(
                 decisions[v.id] = fromScore(cached, settings.strictness)
                 continue
             }
-            if (v.title.isBlank() && !settings.provider.sendThumbnails) {
+            if (v.title.isBlank() && !settings.provider.usesThumbnails) {
                 decisions[v.id] = Decision(v.id, Verdict.UNKNOWN, DecisionSource.ERROR, reason = "No title to check")
                 continue
             }
@@ -96,5 +103,6 @@ class DecisionEngine(
     private fun VideoInfo.mergeInto(page: VideoInfo) = page.copy(
         title = title.ifBlank { page.title },
         channel = page.channel.ifBlank { channel },
+        channelId = page.channelId.ifBlank { channelId },
     )
 }

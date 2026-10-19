@@ -33,7 +33,8 @@
       '<ytm-media-item><a class="media-item-thumbnail-container" href="/watch?v=' + id + '">' +
       '<div class="thumb" style="background:' + color + '">▶</div></a>' +
       '<a href="/watch?v=' + id + '"><h3 class="media-item-headline">' + title + '</h3></a>' +
-      '<div class="media-item-byline">' + channel + '</div></ytm-media-item>';
+      '<a class="media-channel" href="/@' + channel.replace(/\s+/g, '') + '"><div class="media-item-byline">' + channel +
+      '</div></a></ytm-media-item>';
     return el;
   };
   var grid = document.getElementById('grid');
@@ -43,7 +44,8 @@
     ['BABYSHARK01', 'Baby Shark Dance', 'Pinkfong', '#1565c0'],
     ['WITCHBREW01', 'Witches Brew | Spooky Song for Kids', 'Super Simple Songs', '#6a1b9a'],
     ['NUMBERS0001', 'Numberblocks - Learn to Count', 'Numberblocks', '#c62828'],
-    ['MYSTERY0001', 'Super Simple Songs Compilation #14', 'Super Simple Songs', '#455a64']
+    ['MYSTERY0001', 'Super Simple Songs Compilation #14', 'Super Simple Songs', '#455a64'],
+    ['BADCHANNEL1', 'Totally Normal Song', 'Annoying Channel', '#9e9d24']
   ].forEach(function (v) { grid.appendChild(makeCard(v[0], v[1], v[2], v[3])); });
 </script>
 </body>

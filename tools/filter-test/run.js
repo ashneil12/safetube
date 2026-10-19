@@ -16,6 +16,7 @@ const SHOTS = process.argv.includes('--screenshots');
 // Stand-in for the app: blocks anything spooky by title, leaves MYSTERY0001 undecided.
 function decide(v) {
   if (v.id === 'MYSTERY0001') return 'unknown';
+  if (v.channelId === '/@AnnoyingChannel') return 'block'; // a channel the parent blocked
   return /halloween|witch|spooky|pumpkin/i.test(v.title + ' ' + v.context) ? 'block' : 'allow';
 }
 
@@ -78,6 +79,7 @@ function check(name, cond) {
   const pumpkins = asked.find((v) => v.id === 'HALLOWEEN01');
   check('page sent the title it saw', pumpkins && pumpkins.title === 'Five Little Pumpkins | Halloween Song');
   check('page sent the channel it saw', pumpkins && pumpkins.channel === 'Super Simple Songs');
+  check('page sent the channel handle', pumpkins && pumpkins.channelId === '/@SuperSimpleSongs');
   check('each video is asked about once', asked.filter((v) => v.id === 'WHEELSBUS01').length === 1);
 
   // 3. Decisions applied.
@@ -85,6 +87,7 @@ function check(name, cond) {
   check('allowed video is shown (2)', (await vis('#card-NUMBERS0001')) === 'visible');
   check('blocked video is removed', (await vis('#card-HALLOWEEN01')) === 'removed');
   check('blocked video is removed (2)', (await vis('#card-WITCHBREW01')) === 'removed');
+  check('video from a blocked channel is removed', (await vis('#card-BADCHANNEL1')) === 'removed');
   check('undecided video stays hidden', (await vis('#card-MYSTERY0001')) === 'hidden');
   check('loose blocked link stays hidden', (await vis('#looseLink')) === 'hidden');
   check('Shorts shelf is removed', (await vis('#shorts')) === 'removed');

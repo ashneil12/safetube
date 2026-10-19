@@ -41,7 +41,7 @@ class AnthropicClassifier(
         content.put(textBlock(PromptBuilder.rulesText(rules)))
         videos.forEachIndexed { i, v ->
             content.put(textBlock(PromptBuilder.videoText(i, v)))
-            if (config.sendThumbnails) {
+            if (config.usesThumbnails) {
                 content.put(
                     JSONObject()
                         .put("type", "image")

@@ -146,13 +146,21 @@
   var CHANNEL_SEL = '#channel-name, .media-item-byline, .compact-media-item-byline, ytm-badge-and-byline-renderer, ' +
     '.yt-content-metadata-view-model__metadata-row, .ytp-videowall-still-info-author, ytd-channel-name';
 
+  // Links to the uploader's channel, used for "block this channel".
+  var CHANNEL_LINK_SEL = 'a[href^="/@"], a[href*="youtube.com/@"], a[href^="/channel/UC"], a[href*="youtube.com/channel/UC"]';
+
   function describe(card, link, id) {
     var title = text(card.querySelector(TITLE_SEL));
     if (!title && link) title = (link.getAttribute('title') || link.getAttribute('aria-label') || text(link)).trim();
     if (!title) title = (card.getAttribute('aria-label') || '').trim();
     var channel = text(card.querySelector(CHANNEL_SEL));
     var context = text(card).slice(0, 400);
-    return { id: id, title: title.slice(0, 300), channel: channel.slice(0, 120), context: context };
+    var channelLink = card.querySelector(CHANNEL_LINK_SEL);
+    var channelId = channelLink ? channelLink.getAttribute('href') || '' : '';
+    return {
+      id: id, title: title.slice(0, 300), channel: channel.slice(0, 120), context: context,
+      channelId: channelId.slice(0, 200)
+    };
   }
 
   function cardVideoLink(card) {
@@ -285,7 +293,7 @@
     } else {
       showOverlay(id, 'Checking this video…', false);
       // The title on the watch page may still belong to the previous video, so let the app look it up.
-      need({ id: id, title: '', channel: '', context: '' }, true);
+      need({ id: id, title: '', channel: '', context: '', channelId: '' }, true);
     }
   }
 

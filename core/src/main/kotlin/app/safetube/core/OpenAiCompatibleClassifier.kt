@@ -37,7 +37,7 @@ class OpenAiCompatibleClassifier(private val config: ProviderConfig) : VideoClas
         parts.put(JSONObject().put("type", "text").put("text", PromptBuilder.rulesText(rules)))
         videos.forEachIndexed { i, v ->
             parts.put(JSONObject().put("type", "text").put("text", PromptBuilder.videoText(i, v)))
-            if (config.sendThumbnails) {
+            if (config.usesThumbnails) {
                 parts.put(
                     JSONObject().put("type", "image_url")
                         .put("image_url", JSONObject().put("url", v.thumbnailUrl))

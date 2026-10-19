@@ -3,6 +3,7 @@ package app.safetube
 import android.app.Activity
 import android.app.AlertDialog
 import android.graphics.Typeface
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -19,12 +20,17 @@ import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import app.safetube.core.ChannelBlocklist
 import app.safetube.core.Classifiers
+import app.safetube.core.KeywordFilter
+import app.safetube.core.KeywordSuggester
 import app.safetube.core.ProviderConfig
 import app.safetube.core.ProviderType
 import app.safetube.core.Strictness
 import app.safetube.core.Verdict
 import app.safetube.core.VideoInfo
+import app.safetube.core.VideoLinks
+import app.safetube.core.YouTubeOEmbed
 import java.util.concurrent.Executors
 
 /**
@@ -41,6 +47,7 @@ class ParentActivity : Activity() {
     private lateinit var keywords: EditText
     private lateinit var strictness: RadioGroup
     private lateinit var provider: RadioGroup
+    private lateinit var accountId: EditText
     private lateinit var apiKey: EditText
     private lateinit var baseUrl: EditText
     private lateinit var model: EditText
@@ -52,6 +59,14 @@ class ParentActivity : Activity() {
     private lateinit var testResult: TextView
     private lateinit var hiddenList: LinearLayout
     private lateinit var choicesList: LinearLayout
+    private lateinit var channelsList: LinearLayout
+    private lateinit var blockInput: EditText
+    private lateinit var suggestResult: TextView
+    private lateinit var helper: RadioGroup
+    private lateinit var helperFields: LinearLayout
+    private lateinit var helperKey: EditText
+    private lateinit var helperBaseUrl: EditText
+    private lateinit var helperModel: EditText
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -123,6 +138,8 @@ class ParentActivity : Activity() {
     private fun showSettings() {
         val page = column().apply { setPadding(dp(20), dp(20), dp(20), dp(40)) }
 
+        addCurrentPageSection(page)
+
         page.addView(heading("What shouldn't your child see?"))
         page.addView(note("Describe it in your own words. The AI hides videos that match."))
         rules = EditText(this).apply {
@@ -140,6 +157,21 @@ class ParentActivity : Activity() {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
         }
         page.addView(keywords)
+        suggestResult = note("")
+        page.addView(button("Suggest more keywords from my rules (AI)") { suggestKeywords() })
+        page.addView(suggestResult)
+
+        page.addView(heading("Block a video or channel"))
+        page.addView(note("Paste a video link to hide just that video, or a channel link, @handle or channel name to hide everything from that channel."))
+        blockInput = EditText(this).apply {
+            hint = "youtube.com/watch?v=... or @channel"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+        }
+        page.addView(blockInput)
+        page.addView(button("Block it") { blockFromInput() })
+        page.addView(note("Blocked channels:"))
+        channelsList = column()
+        page.addView(channelsList)
 
         page.addView(heading("How careful should the AI be?"))
         strictness = RadioGroup(this)
@@ -152,17 +184,24 @@ class ParentActivity : Activity() {
         }
         page.addView(strictness)
 
-        page.addView(heading("AI provider"))
-        page.addView(note("Only video titles, channel names and thumbnails are sent, using your own key."))
+        page.addView(heading("Video checker AI"))
+        page.addView(note("Decides each video against your rules. Only titles and channel names are sent (plus thumbnails for chat models), using your own key."))
         provider = RadioGroup(this)
         listOf(
-            ProviderType.NONE to "Off (keywords only)",
+            ProviderType.NONE to "Off (keywords and blocks only)",
+            ProviderType.CLEF to "Clef by Cloudflare: fast, free daily allowance (recommended)",
+            ProviderType.JEV to "Jev via OpenRouter: fast, pay per use",
             ProviderType.ANTHROPIC to "Claude (Anthropic API key)",
-            ProviderType.OPENAI_COMPATIBLE to "OpenAI-compatible (OpenRouter, OpenAI, Ollama...)",
+            ProviderType.OPENAI_COMPATIBLE to "OpenAI-compatible (OpenAI, Gemini, Groq, Ollama...)",
         ).forEach { (t, label) -> provider.addView(radio(label, t.ordinal + 1, prefs.providerType == t)) }
         page.addView(provider)
 
         aiFields = column()
+        accountId = EditText(this).apply {
+            hint = "Cloudflare account ID"
+            setText(prefs.accountId)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        }
         apiKey = EditText(this).apply {
             hint = "API key"
             setText(prefs.apiKey)
@@ -182,6 +221,7 @@ class ParentActivity : Activity() {
             isChecked = prefs.sendThumbnails
         }
         baseUrlRow = baseUrl
+        aiFields.addView(accountId)
         aiFields.addView(apiKey)
         aiFields.addView(baseUrl)
         aiFields.addView(model)
@@ -190,8 +230,49 @@ class ParentActivity : Activity() {
         aiFields.addView(button("Test the AI") { testAi() })
         aiFields.addView(testResult)
         page.addView(aiFields)
-        provider.setOnCheckedChangeListener { _, _ -> refreshProviderFields() }
+        provider.setOnCheckedChangeListener { _, _ ->
+            // A model name for one provider means nothing to another.
+            model.setText("")
+            refreshProviderFields()
+        }
         refreshProviderFields()
+
+        page.addView(heading("Keyword helper AI (optional)"))
+        page.addView(note("A chat model that turns your rules into keywords. It only sees your rules, never videos. Gemini's free tier works well."))
+        helper = RadioGroup(this)
+        listOf(
+            ProviderType.NONE to "None",
+            ProviderType.OPENAI_COMPATIBLE to "OpenAI-compatible (Gemini, OpenAI, OpenRouter...)",
+            ProviderType.ANTHROPIC to "Claude (Anthropic API key)",
+        ).forEach { (t, label) -> helper.addView(radio(label, t.ordinal + 1, prefs.helperType == t)) }
+        page.addView(helper)
+        helperFields = column()
+        helperKey = EditText(this).apply {
+            hint = "API key"
+            setText(prefs.helperKey)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        helperBaseUrl = EditText(this).apply {
+            hint = "Base URL"
+            setText(prefs.helperBaseUrl)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+        }
+        helperModel = EditText(this).apply {
+            hint = "Model"
+            setText(prefs.helperModel)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        }
+        helperFields.addView(button("Use Gemini (free tier)") {
+            helper.check(ProviderType.OPENAI_COMPATIBLE.ordinal + 1)
+            helperBaseUrl.setText(Prefs.GEMINI_BASE_URL)
+            helperModel.setText(Prefs.GEMINI_MODEL)
+        })
+        helperFields.addView(helperKey)
+        helperFields.addView(helperBaseUrl)
+        helperFields.addView(helperModel)
+        page.addView(helperFields)
+        helper.setOnCheckedChangeListener { _, _ -> refreshHelperFields() }
+        refreshHelperFields()
 
         page.addView(heading("YouTube"))
         hideShorts = CheckBox(this).apply { text = "Hide Shorts"; isChecked = prefs.hideShorts }
@@ -227,12 +308,30 @@ class ParentActivity : Activity() {
         val type = selectedProvider()
         aiFields.visibility = if (type == ProviderType.NONE) View.GONE else View.VISIBLE
         baseUrlRow.visibility = if (type == ProviderType.OPENAI_COMPATIBLE) View.VISIBLE else View.GONE
-        model.hint = if (type == ProviderType.ANTHROPIC) {
-            "Model (default ${ProviderConfig.DEFAULT_ANTHROPIC_MODEL})"
-        } else {
-            "Model, e.g. openai/gpt-4o-mini or llava"
+        accountId.visibility = if (type == ProviderType.CLEF) View.VISIBLE else View.GONE
+        thumbs.visibility = if (type == ProviderType.ANTHROPIC || type == ProviderType.OPENAI_COMPATIBLE) View.VISIBLE else View.GONE
+        apiKey.hint = when (type) {
+            ProviderType.CLEF -> "Cloudflare API token (Workers AI)"
+            ProviderType.JEV -> "OpenRouter API key"
+            else -> "API key"
+        }
+        model.hint = when (type) {
+            ProviderType.CLEF -> "Model (default ${ProviderConfig.DEFAULT_CLEF_MODEL}; clef-flash is even faster)"
+            ProviderType.JEV -> "Model (default ${ProviderConfig.DEFAULT_JEV_MODEL})"
+            ProviderType.ANTHROPIC -> "Model (default ${ProviderConfig.DEFAULT_ANTHROPIC_MODEL})"
+            else -> "Model, e.g. gpt-4o-mini or llava"
         }
     }
+
+    private fun refreshHelperFields() {
+        val type = selectedHelper()
+        helperFields.visibility = if (type == ProviderType.NONE) View.GONE else View.VISIBLE
+        helperBaseUrl.visibility = if (type == ProviderType.OPENAI_COMPATIBLE) View.VISIBLE else View.GONE
+        helperModel.hint = if (type == ProviderType.ANTHROPIC) "Model (default ${ProviderConfig.DEFAULT_ANTHROPIC_MODEL})" else "Model"
+    }
+
+    private fun selectedHelper(): ProviderType =
+        ProviderType.entries.firstOrNull { it.ordinal + 1 == helper.checkedRadioButtonId } ?: ProviderType.NONE
 
     private fun selectedProvider(): ProviderType =
         ProviderType.entries.firstOrNull { it.ordinal + 1 == provider.checkedRadioButtonId } ?: ProviderType.NONE
@@ -245,10 +344,15 @@ class ParentActivity : Activity() {
         prefs.keywords = keywords.text.toString().trim()
         prefs.strictness = selectedStrictness()
         prefs.providerType = selectedProvider()
+        prefs.accountId = accountId.text.toString().trim()
         prefs.apiKey = apiKey.text.toString().trim()
         prefs.baseUrl = baseUrl.text.toString().trim()
         prefs.model = model.text.toString().trim()
         prefs.sendThumbnails = thumbs.isChecked
+        prefs.helperType = selectedHelper()
+        prefs.helperKey = helperKey.text.toString().trim()
+        prefs.helperBaseUrl = helperBaseUrl.text.toString().trim()
+        prefs.helperModel = helperModel.text.toString().trim()
         prefs.hideShorts = hideShorts.isChecked
         prefs.hideComments = hideComments.isChecked
         prefs.bumpVersion()
@@ -262,6 +366,7 @@ class ParentActivity : Activity() {
             apiKey = apiKey.text.toString().trim(),
             baseUrl = baseUrl.text.toString().trim(),
             model = model.text.toString().trim(),
+            accountId = accountId.text.toString().trim(),
             sendThumbnails = false,
         )
         val ruleText = rules.text.toString()
@@ -290,6 +395,103 @@ class ParentActivity : Activity() {
         }
     }
 
+    // ------------------------------------------------------------------ blocking videos and channels
+
+    /** When opened from a video or channel page, offer to block it in one tap. */
+    private fun addCurrentPageSection(page: LinearLayout) {
+        val url = intent.getStringExtra(EXTRA_CURRENT_URL) ?: return
+        val videoId = VideoLinks.videoId(url)
+        val channelRef = ChannelBlocklist.normalizeId(Uri.parse(url).path ?: "")
+        if (videoId == null && channelRef == null) return
+
+        page.addView(heading("Open right now"))
+        val label = note(videoId?.let { "Video $it" } ?: channelRef!!)
+        page.addView(label)
+        val buttons = column()
+        page.addView(buttons)
+
+        if (videoId == null) {
+            buttons.addView(button("Block this channel") { blockChannel(listOf(channelRef!!)) })
+            return
+        }
+        // Look up the title and channel so the parent sees what they're blocking.
+        io.execute {
+            val info = YouTubeOEmbed.fetch(videoId)
+            main.post {
+                if (info != null) label.text = "\u201c${info.title}\u201d from ${info.channel}"
+                buttons.addView(button("Block this video") { blockVideo(videoId, info?.title) })
+                if (info != null && info.channel.isNotBlank()) {
+                    buttons.addView(button("Block everything from ${info.channel}") {
+                        blockChannel(listOfNotNull(info.channelId.ifBlank { null }, info.channel))
+                    })
+                }
+            }
+        }
+    }
+
+    private fun blockFromInput() {
+        val text = blockInput.text.toString().trim()
+        if (text.isEmpty()) return
+        val videoId = if (ChannelBlocklist.isChannelLink(text)) null else VideoLinks.videoId(text)
+        if (videoId != null) {
+            io.execute {
+                val title = YouTubeOEmbed.fetch(videoId)?.title
+                main.post { blockVideo(videoId, title) }
+            }
+        } else {
+            blockChannel(listOfNotNull(ChannelBlocklist.parse(text)))
+        }
+        blockInput.setText("")
+    }
+
+    private fun blockVideo(id: String, title: String?) {
+        io.execute { store.setOverride(id, Verdict.BLOCK, title) }
+        prefs.bumpVersion()
+        toast("That video is now always hidden")
+        refreshListsLater()
+    }
+
+    /** Stores the handle and the display name, so the block works whichever one a page shows. */
+    private fun blockChannel(entries: List<String>) {
+        entries.forEach { prefs.addBlockedChannel(it) }
+        prefs.bumpVersion()
+        toast("Channel blocked")
+        refreshListsLater()
+    }
+
+    private fun suggestKeywords() {
+        val config = ProviderConfig(
+            type = selectedHelper(),
+            apiKey = helperKey.text.toString().trim(),
+            baseUrl = helperBaseUrl.text.toString().trim(),
+            model = helperModel.text.toString().trim(),
+        )
+        if (config.type == ProviderType.NONE) {
+            suggestResult.text = "Pick a keyword helper AI further down first (Gemini's free tier works)."
+            return
+        }
+        val ruleText = rules.text.toString()
+        val existing = KeywordFilter.parseList(keywords.text.toString())
+        suggestResult.text = "Thinking\u2026"
+        io.execute {
+            val result = try {
+                Result.success(KeywordSuggester(config).suggest(ruleText, existing))
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+            main.post {
+                result.onSuccess { added ->
+                    if (added.isEmpty()) {
+                        suggestResult.text = "No new keywords to add."
+                    } else {
+                        keywords.setText((existing + added).joinToString(", "))
+                        suggestResult.text = "Added ${added.size} keywords. Remove any you don't want, then Save."
+                    }
+                }.onFailure { suggestResult.text = "Didn't work: ${it.message}" }
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ hidden videos and overrides
 
     private fun refreshListsLater() = main.postDelayed({ refreshLists() }, 300)
@@ -308,6 +510,16 @@ class ParentActivity : Activity() {
                     }
                     hiddenList.addView(row(h.title.ifBlank { h.id }, listOf(h.channel, why).filter { it.isNotBlank() }.joinToString(" · "), "Allow") {
                         io.execute { store.setOverride(h.id, Verdict.ALLOW, h.title) }
+                        prefs.bumpVersion()
+                        refreshListsLater()
+                    })
+                }
+                channelsList.removeAllViews()
+                val channels = prefs.blockedChannelList()
+                if (channels.isEmpty()) channelsList.addView(note("None."))
+                channels.forEach { c ->
+                    channelsList.addView(row(c, "Every video hidden", "Remove") {
+                        prefs.removeBlockedChannel(c)
                         prefs.bumpVersion()
                         refreshListsLater()
                     })
@@ -383,5 +595,6 @@ class ParentActivity : Activity() {
 
     companion object {
         const val EXTRA_SETUP = "setup"
+        const val EXTRA_CURRENT_URL = "currentUrl"
     }
 }
