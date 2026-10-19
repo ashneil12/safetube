@@ -97,8 +97,12 @@ function fakeApp(mode) {
     page.errors = [];
     page.on('pageerror', (e) => page.errors.push(String(e)));
     page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) page.errors.push(m.text()); });
-    // Missing files (a font, the stylesheet) would break the screens; the browser's own favicon request doesn't count.
-    page.on('response', (r) => { if (r.status() >= 400 && !r.url().endsWith('/favicon.ico')) page.errors.push(r.status() + ' ' + r.url()); });
+    // Missing app files (a font, the stylesheet) would break the screens. YouTube thumbnails for the
+    // made-up test videos 404 when there is network, and the favicon request isn't ours.
+    page.on('response', (r) => {
+      const u = r.url();
+      if (r.status() >= 400 && u.startsWith('http://127.0.0.1') && !u.endsWith('/favicon.ico')) page.errors.push(r.status() + ' ' + u);
+    });
     await page.addInitScript(fakeApp, mode);
     await page.goto(url);
     await page.waitForTimeout(150);
