@@ -45,7 +45,8 @@ is ever sent to the AI. SafeTube never sees any other traffic on the device.
 
 1. On the tablet, open **Settings → Security & Privacy** and turn on **Apps from Unknown
    Sources** (for the Silk browser or your file manager).
-2. Download `SafeTube-vX.Y.Z.apk` from this repository's **Releases** page and open it.
+2. Download `SafeTube.apk` from this repository's **Releases** page (the "latest" release is
+   rebuilt on every change) and open it.
 3. Open SafeTube, choose a parent PIN, and review the rules.
 4. Recommended: in **Settings → Parental Controls** (or Amazon Kids), block the Silk browser
    and the YouTube app so SafeTube is the only way onto YouTube.
@@ -92,8 +93,8 @@ cd tools/filter-test && npm install && npx playwright install chromium && node r
                                              # page script against a mock YouTube page
 ```
 
-Every push builds an APK in GitHub Actions; pushing a tag like `v0.1.0` publishes it as a
-release. To sign releases with your own key, add the repository secrets
+Every push to `main` builds an APK in GitHub Actions and publishes it as the "latest"
+release; pushing a tag like `v0.1.0` publishes a numbered release as well. To sign releases with your own key, add the repository secrets
 `SAFETUBE_KEYSTORE_B64` (base64 of the .jks), `SAFETUBE_KEYSTORE_PASSWORD`,
 `SAFETUBE_KEY_ALIAS` and `SAFETUBE_KEY_PASSWORD`. Without them the APK is signed with the
 build machine's debug key, which installs fine but can't be upgraded in place by a build

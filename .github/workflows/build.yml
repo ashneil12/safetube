@@ -70,3 +70,13 @@ jobs:
         with:
           files: SafeTube-*.apk
           generate_release_notes: true
+      - name: Publish latest build from main
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp SafeTube-main.apk SafeTube.apk
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest SafeTube.apk --target "$GITHUB_SHA" --latest \
+            --title "SafeTube (latest build)" \
+            --notes "Built from ${GITHUB_SHA::7} on main. Download SafeTube.apk below and open it on the tablet."
