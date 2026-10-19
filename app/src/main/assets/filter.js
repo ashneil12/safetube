@@ -19,7 +19,7 @@
   if (window.__safetube) return;
 
   var bridge = window.SafeTubeAndroid || null;
-  var cfg = { hideShorts: true, hideComments: true, debug: false };
+  var cfg = { hideShorts: true, hideComments: true, blockMenu: true, debug: false };
   try { if (bridge) Object.assign(cfg, JSON.parse(bridge.config())); } catch (e) {}
 
   // One element per video in lists, grids, search results, playlists and "up next".
@@ -105,7 +105,20 @@
       'align-items:center;justify-content:center;gap:16px;background:#fff;color:#0f0f0f;' +
       'font:16px/1.4 Roboto,Arial,sans-serif;text-align:center;padding:24px}' +
       '#st-overlay button{font:inherit;padding:10px 24px;border-radius:20px;border:0;background:#0f0f0f;color:#fff}' +
-      '@media (prefers-color-scheme:dark){#st-overlay{background:#0f0f0f;color:#f1f1f1}#st-overlay button{background:#f1f1f1;color:#0f0f0f}}'
+      '@media (prefers-color-scheme:dark){#st-overlay{background:#0f0f0f;color:#f1f1f1}#st-overlay button{background:#f1f1f1;color:#0f0f0f}}' +
+      // Hold-to-block menu
+      '#st-sheet-bg{position:fixed;inset:0;z-index:2147483646;background:rgba(0,0,0,.45)}' +
+      '#st-sheet{position:fixed;left:0;right:0;bottom:0;z-index:2147483647;background:#fff;color:#0f0f0f;' +
+      'border-radius:16px 16px 0 0;padding:16px 16px 24px;font:16px/1.4 Roboto,Arial,sans-serif;' +
+      'max-width:560px;margin:0 auto;box-shadow:0 -4px 24px rgba(0,0,0,.25)}' +
+      '#st-sheet .st-title{font-weight:500;margin:0 4px 12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+      '#st-sheet button{display:block;width:100%;text-align:left;font:inherit;padding:14px 12px;border:0;' +
+      'background:none;color:inherit;border-radius:10px}' +
+      '#st-sheet button:active{background:rgba(0,0,0,.08)}' +
+      '#st-sheet .st-danger{color:#c4302b;font-weight:500}' +
+      '#st-block-btn{position:fixed;left:12px;bottom:72px;z-index:2147483645;width:44px;height:44px;border-radius:22px;' +
+      'border:0;background:rgba(15,15,15,.75);color:#fff;font-size:20px;line-height:44px;text-align:center;padding:0}' +
+      '@media (prefers-color-scheme:dark){#st-sheet{background:#212121;color:#f1f1f1}}'
     );
     return rules.join('\n');
   }
@@ -277,14 +290,17 @@
     if (!id) {
       html.setAttribute('data-st-watch', 'allow');
       removeOverlay();
+      showBlockButton(false);
       return;
     }
     var v = verdicts[id];
     if (v === 'allow') {
       if (html.getAttribute('data-st-watch') !== 'allow') html.setAttribute('data-st-watch', 'allow');
       removeOverlay();
+      showBlockButton(true);
       return;
     }
+    showBlockButton(false);
     html.setAttribute('data-st-watch', v === 'block' ? 'block' : 'pending');
     pauseAll();
     if (v === 'block') showBlocked(id);
@@ -349,8 +365,155 @@
     else location.replace('/');
   }
 
-  // Stop taps on blocked or unchecked videos before YouTube's own handlers run.
+  // ---------------------------------------------------------------- hold to block
+
+  var HOLD_MS = 550;
+  var holdTimer = null;
+  var holdStart = null;
+  var suppressClickUntil = 0;
+
+  function videoUnder(target) {
+    if (!target || !target.closest) return null;
+    var card = target.closest(CARD_SEL);
+    var link = card ? cardVideoLink(card) : target.closest(VIDEO_LINK_SEL);
+    var id = link ? idFromUrl(link.getAttribute('href')) : null;
+    if (!id) return null;
+    return describe(card || link, link, id);
+  }
+
+  /** The video on the watch page, for the block button. */
+  function currentVideo() {
+    var id = currentWatchId();
+    if (!id) return null;
+    var owner = document.querySelector(
+      'ytm-slim-owner-renderer, #owner, ytd-video-owner-renderer, ytm-video-owner-renderer, .slim-owner-icon-and-title'
+    );
+    var channelLink = owner && owner.querySelector(CHANNEL_LINK_SEL);
+    var title = text(document.querySelector(
+      'h2.slim-video-metadata-title, .slim-video-information-title, ytd-watch-metadata h1, #title h1'
+    )) || document.title.replace(/ - YouTube$/, '');
+    return {
+      id: id, title: title, context: '',
+      channel: owner ? text(owner.querySelector('.slim-owner-channel-name, #channel-name, a')) : '',
+      channelId: channelLink ? channelLink.getAttribute('href') || '' : ''
+    };
+  }
+
+  function cancelHold() {
+    if (holdTimer) clearTimeout(holdTimer);
+    holdTimer = null;
+    holdStart = null;
+  }
+
+  document.addEventListener('touchstart', function (e) {
+    if (!cfg.blockMenu || e.touches.length !== 1) return;
+    var video = videoUnder(e.target);
+    if (!video || verdicts[video.id] !== 'allow') return;
+    var t = e.touches[0];
+    holdStart = { x: t.clientX, y: t.clientY };
+    holdTimer = setTimeout(function () {
+      holdTimer = null;
+      suppressClickUntil = Date.now() + 800;
+      openSheet(video);
+    }, HOLD_MS);
+  }, { capture: true, passive: true });
+  document.addEventListener('touchmove', function (e) {
+    if (!holdStart) return;
+    var t = e.touches[0];
+    if (Math.abs(t.clientX - holdStart.x) > 10 || Math.abs(t.clientY - holdStart.y) > 10) cancelHold();
+  }, { capture: true, passive: true });
+  document.addEventListener('touchend', cancelHold, true);
+  document.addEventListener('touchcancel', cancelHold, true);
+
+  // Long-press in the WebView (and right-click with a mouse) also fires contextmenu.
+  document.addEventListener('contextmenu', function (e) {
+    if (!cfg.blockMenu) return;
+    var video = videoUnder(e.target);
+    if (!video) return;
+    e.preventDefault();
+    if (document.getElementById('st-sheet')) return;
+    cancelHold();
+    suppressClickUntil = Date.now() + 800;
+    openSheet(video);
+  }, true);
+
+  function closeSheet() {
+    ['st-sheet', 'st-sheet-bg'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.remove();
+    });
+  }
+
+  function openSheet(video) {
+    closeSheet();
+    var parent = document.body || document.documentElement;
+    var bg = document.createElement('div');
+    bg.id = 'st-sheet-bg';
+    bg.addEventListener('click', closeSheet);
+    var sheet = document.createElement('div');
+    sheet.id = 'st-sheet';
+    var title = document.createElement('div');
+    title.className = 'st-title';
+    title.textContent = video.title || 'This video';
+    sheet.appendChild(title);
+
+    function option(label, cls, onTap) {
+      var b = document.createElement('button');
+      b.textContent = label;
+      if (cls) b.className = cls;
+      b.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        closeSheet();
+        if (onTap) onTap();
+      });
+      sheet.appendChild(b);
+    }
+    option('\uD83D\uDEAB  Block this video', 'st-danger', function () { requestBlock('video', video); });
+    var channelName = (video.channel || '').split(/\s+[\u00b7\u2022]\s+/)[0];
+    option('\uD83D\uDEAB  Block this channel' + (channelName ? ' (' + channelName + ')' : ''), 'st-danger',
+      function () { requestBlock('channel', { id: video.id, title: video.title, channel: channelName, channelId: video.channelId }); });
+    option('Cancel', '', null);
+    parent.appendChild(bg);
+    parent.appendChild(sheet);
+  }
+
+  function requestBlock(kind, video) {
+    var req = JSON.stringify({
+      kind: kind, id: video.id, title: video.title || '', channel: video.channel || '', channelId: video.channelId || ''
+    });
+    if (bridge && bridge.block) {
+      try { bridge.block(req); } catch (e) { log('block failed ' + e); }
+    } else if (window.__safetubeTestBlock) {
+      window.__safetubeTestBlock(JSON.parse(req));
+    }
+  }
+
+  function showBlockButton(show) {
+    var btn = document.getElementById('st-block-btn');
+    if (!show || !cfg.blockMenu) { if (btn) btn.remove(); return; }
+    if (btn) return;
+    btn = document.createElement('button');
+    btn.id = 'st-block-btn';
+    btn.setAttribute('aria-label', 'Block this video or channel');
+    btn.textContent = '\uD83D\uDEAB';
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      var v = currentVideo();
+      if (v) openSheet(v);
+    });
+    (document.body || document.documentElement).appendChild(btn);
+  }
+
+  // Stop taps on blocked or unchecked videos before YouTube's own handlers run,
+  // and the tap that ends a long-press from opening the video.
   document.addEventListener('click', function (e) {
+    if (Date.now() < suppressClickUntil && !(e.target.closest && e.target.closest('#st-sheet'))) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     var a = e.target && e.target.closest ? e.target.closest(VIDEO_LINK_SEL) : null;
     if (!a) return;
     var id = idFromUrl(a.getAttribute('href'));

@@ -26,8 +26,11 @@ rules simply aren't there.
   the device, so it costs almost nothing after the first few days.
 - **Strict / Balanced / Relaxed.** Strict (the default) hides anything the AI isn't fairly
   sure is fine.
-- **Block one video or a whole channel.** Paste a link, or open the settings while a video or
-  channel is on screen and tap "Block this video" / "Block everything from this channel".
+- **Hold to block.** Hold any video (or tap 🚫 while one is playing) and choose "Block this
+  video" or "Block this channel". By default children can do this themselves, since blocking
+  has no downside; only a parent can unblock. Turn that off and blocking asks for the PIN.
+- **Block by link too.** In parent settings, paste a video link, a channel link, an @handle or
+  a channel name.
 - **AI-written keyword lists.** Describe what you don't want and a chat model (Gemini's free
   tier works) suggests every keyword it can think of. You review the list before saving.
 - **You stay in charge.** A parent PIN protects the settings. The "Recently hidden" list

@@ -54,6 +54,7 @@ class ParentActivity : Activity() {
     private lateinit var thumbs: CheckBox
     private lateinit var hideShorts: CheckBox
     private lateinit var hideComments: CheckBox
+    private lateinit var kidsCanBlock: CheckBox
     private lateinit var aiFields: LinearLayout
     private lateinit var baseUrlRow: View
     private lateinit var testResult: TextView
@@ -279,6 +280,12 @@ class ParentActivity : Activity() {
         hideComments = CheckBox(this).apply { text = "Hide comments"; isChecked = prefs.hideComments }
         page.addView(hideShorts)
         page.addView(hideComments)
+        kidsCanBlock = CheckBox(this).apply {
+            text = "Let my child block videos and channels too (hold a video). Only you can unblock."
+            isChecked = prefs.kidsCanBlock
+        }
+        page.addView(kidsCanBlock)
+        page.addView(note("Hold any video, or tap \uD83D\uDEAB while one is playing, to block it or its channel. With this off, blocking asks for your PIN."))
 
         page.addView(button("Save") { save(); finish() })
 
@@ -355,6 +362,7 @@ class ParentActivity : Activity() {
         prefs.helperModel = helperModel.text.toString().trim()
         prefs.hideShorts = hideShorts.isChecked
         prefs.hideComments = hideComments.isChecked
+        prefs.kidsCanBlock = kidsCanBlock.isChecked
         prefs.bumpVersion()
         toast("Saved")
     }

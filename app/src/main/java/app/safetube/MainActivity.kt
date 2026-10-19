@@ -2,12 +2,14 @@ package app.safetube
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
+import android.text.InputType
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -19,6 +21,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -26,6 +29,8 @@ import android.widget.Toast
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import app.safetube.core.DecisionEngine
+import app.safetube.core.Verdict
+import app.safetube.core.YouTubeOEmbed
 
 /**
  * The child's screen: normal YouTube in a WebView, with the filter script running on every page.
@@ -72,7 +77,7 @@ class MainActivity : Activity() {
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         }
 
-        bridge = FilterBridge(webView, prefs, DecisionEngine(store), ::showAiError)
+        bridge = FilterBridge(webView, prefs, DecisionEngine(store), ::showAiError, ::onBlockRequest)
         webView.addJavascriptInterface(bridge, "SafeTubeAndroid")
 
         // Best case: the filter is in place before YouTube's own scripts run, so nothing unchecked
@@ -254,6 +259,62 @@ class MainActivity : Activity() {
             }
             true
         }
+    }
+
+    // ------------------------------------------------------------------ hold-to-block
+
+    private fun onBlockRequest(req: FilterBridge.BlockRequest) {
+        if (prefs.kidsCanBlock) {
+            applyBlock(req)
+            return
+        }
+        // Blocking is parent-only in this mode: ask for the PIN first.
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            hint = "Parent PIN"
+        }
+        AlertDialog.Builder(this)
+            .setTitle(if (req.channel) "Block this channel?" else "Block this video?")
+            .setView(FrameLayout(this).apply { setPadding(dp(24), dp(8), dp(24), 0); addView(input) })
+            .setPositiveButton("Block") { _, _ ->
+                if (prefs.checkPin(input.text.toString())) applyBlock(req) else toast("Wrong PIN")
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun applyBlock(req: FilterBridge.BlockRequest) {
+        val v = req.video
+        if (!req.channel) {
+            store.setOverride(v.id, Verdict.BLOCK, v.title.ifBlank { null })
+            bridge.hideNow(v.id)
+            syncVersion()
+            toast("Video blocked. A grown-up can unblock it in parent settings.")
+            return
+        }
+        Thread {
+            // The page may not show which channel a video is from; YouTube's oEmbed always does.
+            val looked = if (v.channelId.isBlank() || v.channel.isBlank()) YouTubeOEmbed.fetch(v.id) else null
+            val handle = v.channelId.ifBlank { looked?.channelId ?: "" }
+            val name = v.channel.ifBlank { looked?.channel ?: "" }
+            runOnUiThread {
+                if (handle.isBlank() && name.isBlank()) {
+                    toast("Couldn't tell which channel this is. Try again on the video's page.")
+                    return@runOnUiThread
+                }
+                listOf(handle, name).filter { it.isNotBlank() }.forEach { prefs.addBlockedChannel(it) }
+                syncVersion()
+                // Re-check everything on screen against the new channel list.
+                webView.evaluateJavascript("window.__safetube && window.__safetube.reset(${prefs.pageConfigJson()})", null)
+                toast("${name.ifBlank { handle }} blocked. A grown-up can unblock it in parent settings.")
+            }
+        }.start()
+    }
+
+    /** Record a settings change made from this screen so onResume doesn't redo it. */
+    private fun syncVersion() {
+        prefs.bumpVersion()
+        seenVersion = prefs.version
     }
 
     private fun showAiError(reason: String) {

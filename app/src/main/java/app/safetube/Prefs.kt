@@ -92,6 +92,11 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("hideShorts", true)
         set(v) = sp.edit().putBoolean("hideShorts", v).apply()
 
+    /** Let the child hide videos and channels from the tablet themselves. Only the parent can undo it. */
+    var kidsCanBlock: Boolean
+        get() = sp.getBoolean("kidsCanBlock", true)
+        set(v) = sp.edit().putBoolean("kidsCanBlock", v).apply()
+
     var hideComments: Boolean
         get() = sp.getBoolean("hideComments", true)
         set(v) = sp.edit().putBoolean("hideComments", v).apply()
@@ -139,6 +144,7 @@ class Prefs(context: Context) {
     fun pageConfigJson(): String = JSONObject()
         .put("hideShorts", hideShorts)
         .put("hideComments", hideComments)
+        .put("blockMenu", true)
         .put("debug", BuildConfigFlags.DEBUG)
         .toString()
 

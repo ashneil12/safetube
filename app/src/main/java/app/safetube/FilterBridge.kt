@@ -25,7 +25,11 @@ class FilterBridge(
     private val prefs: Prefs,
     private val engine: DecisionEngine,
     private val onAiError: (String) -> Unit,
+    /** Called on the main thread when someone uses the hold-to-block menu. */
+    private val onBlockRequest: (BlockRequest) -> Unit,
 ) {
+    data class BlockRequest(val channel: Boolean, val video: VideoInfo)
+
     private val main = Handler(Looper.getMainLooper())
     private val pool: ExecutorService = Executors.newFixedThreadPool(2)
 
@@ -55,6 +59,26 @@ class FilterBridge(
                 webView.evaluateJavascript("window.__safetube && window.__safetube.apply($result)", null)
             }
         }
+    }
+
+    @JavascriptInterface
+    fun block(json: String) {
+        if (!isYouTubeHost(currentHost)) return
+        val o = try { JSONObject(json) } catch (e: Exception) { return }
+        val video = VideoInfo(
+            id = o.optString("id"),
+            title = o.optString("title"),
+            channel = o.optString("channel"),
+            channelId = ChannelBlocklist.normalizeId(o.optString("channelId")) ?: "",
+        )
+        if (!VideoInfo.isValidId(video.id)) return
+        val request = BlockRequest(channel = o.optString("kind") == "channel", video = video)
+        main.post { onBlockRequest(request) }
+    }
+
+    /** Hides one video on the open page straight away. */
+    fun hideNow(id: String) {
+        webView.evaluateJavascript("window.__safetube && window.__safetube.apply({\"$id\":\"block\"})", null)
     }
 
     fun shutdown() = pool.shutdownNow()

@@ -41,6 +41,8 @@ function check(name, cond) {
   // The fake Android bridge records what the page asks for; the test answers when it chooses.
   await page.addInitScript(() => {
     window.__submitted = [];
+    window.__blocks = [];
+    window.__safetubeTestBlock = (req) => window.__blocks.push(req);
     window.SafeTubeAndroid = {
       config: () => JSON.stringify({ hideShorts: true, hideComments: true }),
       submit: (json) => window.__submitted.push(...JSON.parse(json)),
@@ -152,14 +154,48 @@ function check(name, cond) {
   check('player shown once the video is allowed', (await vis('#player')) === 'visible');
   check('overlay removed once allowed', (await page.$('#st-overlay')) === null);
 
-  // 9. Settings change: everything is re-checked.
+  // 9. Hold-to-block menu.
+  check('block button shows on an allowed video', (await page.$('#st-block-btn')) !== null);
+  await page.click('#st-block-btn');
+  check('block button opens the menu', (await page.$('#st-sheet')) !== null);
+  await page.click('#st-sheet >> text=Block this video');
+  let blocks = await page.evaluate(() => window.__blocks.splice(0));
+  check('"Block this video" asks the app to block the playing video',
+    blocks.length === 1 && blocks[0].kind === 'video' && blocks[0].id === 'FRESHVIDEO1');
+  check('menu closes after choosing', (await page.$('#st-sheet')) === null);
+
+  await page.evaluate(() => history.pushState({}, '', '/'));
+  await page.waitForTimeout(100);
+  check('block button hidden off the watch page', (await page.$('#st-block-btn')) === null);
+  await page.dispatchEvent('#card-WHEELSBUS01 h3', 'contextmenu');
+  const sheetText = await page.$eval('#st-sheet', (el) => el.textContent).catch(() => '');
+  check('long-press on a video opens the menu with its title', sheetText.includes('Wheels On The Bus'));
+  check('menu names the channel', sheetText.includes('Block this channel (Super Simple Songs)'));
+  if (SHOTS) await page.screenshot({ path: path.join(__dirname, 'screenshots/3-hold-menu.png') });
+  const leaked = await page.evaluate(() => {
+    const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
+    document.querySelector('#card-WHEELSBUS01 a').dispatchEvent(ev);
+    return !ev.defaultPrevented;
+  });
+  check('the tap that ends a long-press does not open the video', !leaked);
+  await page.click('#st-sheet >> text=Block this channel');
+  blocks = await page.evaluate(() => window.__blocks.splice(0));
+  check('"Block this channel" sends the channel handle',
+    blocks.length === 1 && blocks[0].kind === 'channel' && blocks[0].channelId === '/@SuperSimpleSongs' &&
+    blocks[0].channel === 'Super Simple Songs');
+  await page.dispatchEvent('#card-NUMBERS0001 h3', 'contextmenu');
+  await page.click('#st-sheet >> text=Cancel');
+  check('Cancel closes the menu without blocking',
+    (await page.$('#st-sheet')) === null && (await page.evaluate(() => window.__blocks.length)) === 0);
+
+  // 10. Settings change: everything is re-checked.
   await page.evaluate(() => history.pushState({}, '', '/'));
   await page.evaluate(() => { window.__submitted.length = 0; window.__safetube.reset({ hideShorts: false }); });
   await page.waitForTimeout(150);
   check('after reset, previously allowed video is hidden again', (await vis('#card-WHEELSBUS01')) === 'hidden');
   check('after reset, Shorts shelf is back when allowed', (await vis('#shorts')) === 'visible');
 
-  // 10. Opening a Short directly goes to the normal player when Shorts are hidden.
+  // 11. Opening a Short directly goes to the normal player when Shorts are hidden.
   await page.goto(base + '/shorts/WHEELSBUS01');
   await page.waitForURL(/\/watch\?v=WHEELSBUS01/, { timeout: 3000 }).catch(() => {});
   check('a Short opens in the normal player instead', page.url().endsWith('/watch?v=WHEELSBUS01'));
