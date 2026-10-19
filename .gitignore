@@ -1,0 +1,11 @@
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+.DS_Store
+/captures
+*.keystore
+*.jks
+tools/filter-test/node_modules/
+tools/filter-test/screenshots/

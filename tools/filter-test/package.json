@@ -1,0 +1,11 @@
+{
+  "name": "safetube-filter-test",
+  "private": true,
+  "description": "Runs app/src/main/assets/filter.js against a mock YouTube page in headless Chromium.",
+  "scripts": {
+    "test": "node run.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.48.0"
+  }
+}
