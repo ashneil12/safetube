@@ -1,0 +1,10 @@
+// Copy this file to Local.xcconfig (same folder) and fill in your own values.
+// Local.xcconfig is ignored by git, so your team id never ends up in the repository.
+
+// Your Apple team id: Xcode > Settings > Accounts > your Apple ID > the team's "Team ID",
+// or run: security find-identity -v -p codesigning  (the 10 characters in brackets after your name).
+DEVELOPMENT_TEAM = ABCDE12345
+
+// Any reverse-domain name nobody else has used. A free Apple ID can't sign app.safetube.ios
+// once someone else has, so make it yours:
+PRODUCT_BUNDLE_IDENTIFIER = com.yourname.safetube

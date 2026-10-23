@@ -1,0 +1,10 @@
+// Signing and app id for SafeTube on iPhone and iPad.
+//
+// Don't edit these here. Copy Local.example.xcconfig to Local.xcconfig (it isn't committed)
+// and put your own Apple team id and a bundle id only you use in it.
+
+PRODUCT_BUNDLE_IDENTIFIER = app.safetube.ios
+DEVELOPMENT_TEAM =
+CODE_SIGN_STYLE = Automatic
+
+#include? "Local.xcconfig"
