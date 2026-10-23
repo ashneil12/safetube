@@ -23,6 +23,7 @@ import android.widget.ImageView
 import android.widget.FrameLayout
 import android.widget.ProgressBar
 import android.widget.Toast
+import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import app.safetube.core.DecisionEngine
@@ -64,8 +65,16 @@ class MainActivity : Activity() {
         root.addView(buildParentButton(), FrameLayout.LayoutParams(dp(44), dp(44), Gravity.TOP or Gravity.END))
         setContentView(root)
 
-        CookieManager.getInstance().setAcceptCookie(true)
+        CookieManager.getInstance().apply {
+            setAcceptCookie(true)
+            // Google sign-in hands the login from accounts.google.com to youtube.com through
+            // cross-site cookies. Without these it spins forever and never signs in.
+            setAcceptThirdPartyCookies(webView, true)
+        }
         webView.settings.apply {
+            // Google stalls or refuses sign-in when it sees an embedded app browser, so send the
+            // user agent Chrome on this device would.
+            userAgentString = userAgentString.replace("; wv)", ")").replace(Regex("Version/[\\d.]+ "), "")
             javaScriptEnabled = true
             domStorageEnabled = true
             mediaPlaybackRequiresUserGesture = true
@@ -74,6 +83,10 @@ class MainActivity : Activity() {
             allowFileAccess = false
             allowContentAccess = false
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+        }
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.REQUESTED_WITH_HEADER_ALLOW_LIST)) {
+            // The X-Requested-With header names this app, which also trips Google's check.
+            WebSettingsCompat.setRequestedWithHeaderOriginAllowList(webView.settings, emptySet())
         }
 
         bridge = FilterBridge(webView, prefs, DecisionEngine(store), ::showAiError, ::onBlockRequest)
@@ -192,9 +205,16 @@ class MainActivity : Activity() {
             return false
         }
         if (FilterBridge.isYouTubeHost(host)) return true
-        if (host in SIGN_IN_HOSTS) return true
+        if (isSignInPage(host, uri.path ?: "")) return true
         toast("Links outside YouTube are turned off")
         return false
+    }
+
+    /** Google's sign-in hops across several hosts, including country domains like google.co.uk. */
+    private fun isSignInPage(host: String, path: String): Boolean {
+        if (host in SIGN_IN_HOSTS) return true
+        if (host.startsWith("accounts.") && GOOGLE.matches(host.removePrefix("accounts."))) return true
+        return GOOGLE.matches(host.removePrefix("www.")) && SIGN_IN_PATHS.any { path.startsWith(it) }
     }
 
     // ------------------------------------------------------------------ fullscreen video
@@ -344,7 +364,9 @@ class MainActivity : Activity() {
         private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
         private val SIGN_IN_HOSTS = setOf(
             "accounts.google.com", "accounts.youtube.com", "consent.youtube.com", "consent.google.com",
-            "myaccount.google.com", "accounts.google.co.uk",
+            "myaccount.google.com", "gds.google.com",
         )
+        private val SIGN_IN_PATHS = listOf("/accounts", "/signin", "/ServiceLogin", "/sorry")
+        private val GOOGLE = Regex("google\\.(com?\\.)?[a-z]{2,3}")
     }
 }
