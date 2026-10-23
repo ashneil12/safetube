@@ -90,7 +90,9 @@ final class MainViewController: UIViewController, WKNavigationDelegate, WKUIDele
         ])
 
         seenVersion = prefs.version
-        webView.load(URLRequest(url: launchUrl()))
+        // Load once the ad rules are in place, so the first page doesn't reach the ad servers.
+        let first = launchUrl()
+        applyAdBlocking { [weak self] in self?.webView.load(URLRequest(url: first)) }
 
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(rememberPage), name: UIApplication.willResignActiveNotification, object: nil)
@@ -105,6 +107,47 @@ final class MainViewController: UIViewController, WKNavigationDelegate, WKUIDele
             return url
         }
         return MainViewController.startUrl
+    }
+
+    // ------------------------------------------------------------------ ad blocking
+
+    private static var adRules: WKContentRuleList?
+    private var adRulesOn = false
+
+    /// Blocks the ad and tracker addresses in AdBlocklist (the same list as Android's
+    /// AdBlocklist.kt) while "Block ads" is on; filter.js skips the video ads themselves.
+    private func applyAdBlocking(then done: (() -> Void)? = nil) {
+        let controller = webView.configuration.userContentController
+        let want = prefs.blockAds
+        if !want {
+            if let rules = MainViewController.adRules, adRulesOn { controller.remove(rules) }
+            adRulesOn = false
+            done?()
+            return
+        }
+        if adRulesOn { done?(); return }
+        if let rules = MainViewController.adRules {
+            controller.add(rules)
+            adRulesOn = true
+            done?()
+            return
+        }
+        let json = AdBlocklist.contentRuleListJSON()
+        let id = "safetube-ads-" + String(Hashing.sha256(json).prefix(12))
+        WKContentRuleListStore.default().compileContentRuleList(forIdentifier: id, encodedContentRuleList: json) {
+            [weak self] rules, _ in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                if let rules = rules {
+                    MainViewController.adRules = rules
+                    if self.prefs.blockAds && !self.adRulesOn {
+                        self.webView.configuration.userContentController.add(rules)
+                        self.adRulesOn = true
+                    }
+                }
+                done?()
+            }
+        }
     }
 
     @objc private func rememberPage() {
@@ -241,6 +284,7 @@ final class MainViewController: UIViewController, WKNavigationDelegate, WKUIDele
         guard force || prefs.version != seenVersion else { return }
         seenVersion = prefs.version
         installScripts(webView.configuration.userContentController)
+        applyAdBlocking()
         webView.evaluateJavaScript("window.__safetube && window.__safetube.reset(\(prefs.pageConfigJson()))", completionHandler: nil)
     }
 

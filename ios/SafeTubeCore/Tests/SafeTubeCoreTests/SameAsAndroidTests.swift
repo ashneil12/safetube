@@ -73,6 +73,40 @@ final class SameAsAndroidTests: XCTestCase {
             .deletingLastPathComponent().deletingLastPathComponent()
     }
 
+    func testAdBlocklistIsIdentical() throws {
+        let url = repoRoot().appendingPathComponent("app/src/main/java/app/safetube/AdBlocklist.kt")
+        let kt = try String(contentsOf: url, encoding: .utf8)
+        func strings(after marker: String) throws -> [String] {
+            let start = try XCTUnwrap(kt.range(of: marker))
+            let tail = kt[start.upperBound...]
+            let end = try XCTUnwrap(tail.range(of: ")"))
+            let chunk = String(tail[..<end.lowerBound]) as NSString
+            let re = try NSRegularExpression(pattern: "\"([^\"]*)\"")
+            return re.matches(in: chunk as String, range: NSRange(location: 0, length: chunk.length))
+                .map { chunk.substring(with: $0.range(at: 1)) }
+        }
+        XCTAssertEqual(Set(AdBlocklist.hosts), Set(try strings(after: "HOSTS = setOf(")))
+        XCTAssertEqual(Set(AdBlocklist.youtubePaths), Set(try strings(after: "YOUTUBE_PATHS = listOf(")))
+    }
+
+    func testAdRulesBlockTheSameAddresses() throws {
+        XCTAssertTrue(AdBlocklist.blocks(URL(string: "https://securepubads.g.doubleclick.net/x")!))
+        XCTAssertTrue(AdBlocklist.blocks(URL(string: "https://m.youtube.com/api/stats/ads?x=1")!))
+        XCTAssertFalse(AdBlocklist.blocks(URL(string: "https://m.youtube.com/watch?v=dQw4w9WgXcQ")!))
+        XCTAssertFalse(AdBlocklist.blocks(URL(string: "https://notdoubleclick.net/")!))
+        let rules = try XCTUnwrap(JSON.array(AdBlocklist.contentRuleListJSON()))
+        XCTAssertEqual(rules.count, AdBlocklist.hosts.count + AdBlocklist.youtubePaths.count)
+        // The rules' patterns agree with blocks() on a few addresses.
+        let patterns = rules.compactMap { (($0 as? [String: Any])?["trigger"] as? [String: Any])?["url-filter"] as? String }
+            .map { try! NSRegularExpression(pattern: $0, options: [.caseInsensitive]) }
+        for (u, want) in [("https://securepubads.g.doubleclick.net/x", true), ("https://doubleclick.net/", true),
+                          ("https://m.youtube.com/pagead/conv", true), ("https://www.youtube.com/youtubei/v1/log_event?a", true),
+                          ("https://m.youtube.com/watch?v=x", false), ("https://notdoubleclick.net/", false),
+                          ("https://i.ytimg.com/vi/x/mqdefault.jpg", false)] {
+            XCTAssertEqual(patterns.contains { Re.contains($0, u) }, want, u)
+        }
+    }
+
     func testStrictnessThresholdsAreIdentical() throws {
         let models = try kotlin("Models.kt")
         for s in Strictness.allCases {

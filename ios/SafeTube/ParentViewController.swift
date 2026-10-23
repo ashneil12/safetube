@@ -280,6 +280,7 @@ final class ParentViewController: UIViewController, WKNavigationDelegate, WKUIDe
         prefs.hideShorts = JSON.optBool(o, "hideShorts", true)
         prefs.hideComments = JSON.optBool(o, "hideComments", true)
         prefs.kidsCanBlock = JSON.optBool(o, "kidsCanBlock", true)
+        prefs.blockAds = JSON.optBool(o, "blockAds", true)
         prefs.bumpVersion()
     }
 
@@ -338,6 +339,7 @@ final class ParentViewController: UIViewController, WKNavigationDelegate, WKUIDe
             "hideShorts": prefs.hideShorts,
             "hideComments": prefs.hideComments,
             "kidsCanBlock": prefs.kidsCanBlock,
+            "blockAds": prefs.blockAds,
         ]
     }
 

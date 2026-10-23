@@ -116,6 +116,12 @@ final class Prefs {
         set { sp.set(newValue, forKey: "hideComments") }
     }
 
+    /// Skip video ads in the page and stop ad and tracker addresses from loading.
+    var blockAds: Bool {
+        get { bool("blockAds", true) }
+        set { sp.set(newValue, forKey: "blockAds") }
+    }
+
     /// Bumped whenever settings change so open pages re-check what they show.
     private(set) var version: Int {
         get { sp.integer(forKey: "version") }
@@ -200,6 +206,7 @@ final class Prefs {
             "hideComments": hideComments,
             "blockMenu": true,
             "kidsCanBlock": kidsCanBlock,
+            "blockAds": blockAds,
             "debug": false,
         ])
     }
