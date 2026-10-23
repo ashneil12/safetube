@@ -23,8 +23,8 @@ android {
             if (ks != null) {
                 storeFile = file(ks)
                 storePassword = System.getenv("SAFETUBE_KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("SAFETUBE_KEY_ALIAS")
-                keyPassword = System.getenv("SAFETUBE_KEY_PASSWORD")
+                keyAlias = System.getenv("SAFETUBE_KEY_ALIAS")?.ifBlank { null } ?: "safetube"
+                keyPassword = System.getenv("SAFETUBE_KEY_PASSWORD")?.ifBlank { null } ?: storePassword
             }
         }
     }

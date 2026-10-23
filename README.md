@@ -100,11 +100,20 @@ node ../parent-test/run.js                   # PIN, setup and parent settings sc
 ```
 
 Every push to `main` builds an APK in GitHub Actions and publishes it as the "latest"
-release; pushing a tag like `v0.1.0` publishes a numbered release as well. To sign releases with your own key, add the repository secrets
-`SAFETUBE_KEYSTORE_B64` (base64 of the .jks), `SAFETUBE_KEYSTORE_PASSWORD`,
-`SAFETUBE_KEY_ALIAS` and `SAFETUBE_KEY_PASSWORD`. Without them the APK is signed with the
-build machine's debug key, which installs fine but can't be upgraded in place by a build
-from a different machine.
+release; pushing a tag like `v0.1.0` publishes a numbered release as well. To sign every build with the same key, so updates install over the old app and keep its
+settings, add two repository secrets: `SAFETUBE_KEYSTORE_B64` (base64 of the .jks) and
+`SAFETUBE_KEYSTORE_PASSWORD`. The key alias defaults to `safetube` and the key password to the
+store password; set `SAFETUBE_KEY_ALIAS` and `SAFETUBE_KEY_PASSWORD` to override them. Make a
+key with:
+
+```sh
+keytool -genkeypair -keystore safetube-release.jks -alias safetube -keyalg RSA -keysize 3072 -validity 36500
+base64 -w0 safetube-release.jks   # paste the output into SAFETUBE_KEYSTORE_B64
+```
+
+Keep the .jks and its password somewhere safe: lose them and the next update has to be
+installed fresh. Without the secrets the APK is signed with the build machine's throwaway
+debug key, which installs but can't be updated in place.
 
 ## Project layout
 
