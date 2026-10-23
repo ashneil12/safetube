@@ -67,19 +67,68 @@ jobs:
         with:
           name: SafeTube-apk
           path: SafeTube-*.apk
+
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Engine tests (Swift port)
+        run: swift test --package-path ios/SafeTubeCore
+      - name: Install XcodeGen
+        if: ${{ !cancelled() }}
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        if: ${{ !cancelled() }}
+        working-directory: ios
+        run: xcodegen generate
+      - name: Build unsigned app
+        if: ${{ !cancelled() }}
+        working-directory: ios
+        run: |
+          xcodebuild -project SafeTube.xcodeproj -scheme SafeTube -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
+      - name: Package IPA
+        run: |
+          mkdir -p Payload
+          cp -R ios/build/Build/Products/Release-iphoneos/SafeTube.app Payload/
+          test -f Payload/SafeTube.app/filter.js
+          test -f Payload/SafeTube.app/parent/index.html
+          zip -qry "SafeTube-${GITHUB_REF_NAME//\//-}.ipa" Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SafeTube-ipa
+          path: SafeTube-*.ipa
+
+  # Publishing waits for both apps so the release always has a matching APK and IPA.
+  # Never runs for pull requests.
+  publish:
+    runs-on: ubuntu-latest
+    needs: [apk, ios]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: SafeTube-*
+          merge-multiple: true
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: SafeTube-*.apk
+          files: |
+            SafeTube-*.apk
+            SafeTube-*.ipa
           generate_release_notes: true
       - name: Publish latest build from main
         if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           cp SafeTube-main.apk SafeTube.apk
+          cp SafeTube-main.ipa SafeTube.ipa
           gh release delete latest --yes --cleanup-tag || true
-          gh release create latest SafeTube.apk --target "$GITHUB_SHA" --latest \
+          gh release create latest SafeTube.apk SafeTube.ipa --target "$GITHUB_SHA" --latest \
             --title "SafeTube (latest build)" \
-            --notes "Built from ${GITHUB_SHA::7} on main. Download SafeTube.apk below and open it on the tablet."
+            --notes "Built from ${GITHUB_SHA::7} on main. SafeTube.apk is for Android and Fire tablets: open it on the tablet. SafeTube.ipa is for iPhone and iPad: install it with Sideloadly or AltStore (see the README)."

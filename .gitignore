@@ -10,3 +10,13 @@ local.properties
 tools/filter-test/node_modules/
 tools/filter-test/screenshots/
 tools/parent-test/screenshots/
+
+# iPhone / iPad app
+ios/SafeTube.xcodeproj/
+ios/SafeTube/Info.plist
+ios/Config/Local.xcconfig
+ios/build/
+ios/SafeTubeCore/.build/
+.swiftpm/
+xcuserdata/
+*.ipa
