@@ -109,12 +109,17 @@ function fakeApp(mode) {
     return page;
   }
   const type = async (page, digits) => { for (const d of digits) await page.click(`.keypad [data-k="${d}"]`); };
-  const shot = async (page, name) => { if (SHOTS) await page.screenshot({ path: path.join(shots, name + '.png'), fullPage: true }); };
+  const shot = async (page, name) => { if (SHOTS) await page.waitForTimeout(700); if (SHOTS) await page.screenshot({ path: path.join(shots, name + '.png'), fullPage: true }); };
   const log = (page) => page.evaluate(() => window.__log.slice());
 
   // 1. First run: create a PIN, choose what to hide, set up the checker.
   let page = await open('setup');
-  check('setup starts by creating a PIN', (await page.textContent('h1')) === 'Create a parent PIN');
+  check('setup opens with a welcome', (await page.textContent('h1')).startsWith('YouTube, minus'));
+  await page.waitForTimeout(600);
+  await shot(page, '00-welcome');
+  await page.click('[data-go]');
+  check('then creates a PIN', (await page.textContent('h1')) === 'Create a parent PIN');
+  await page.waitForTimeout(600);
   await shot(page, '01-create-pin');
   await type(page, '4321');
   await page.waitForTimeout(200);
@@ -144,6 +149,10 @@ function fakeApp(mode) {
   await page.click('[data-done]');
   const after = await page.evaluate(() => window.__settings.provider);
   check('the checker keys are saved', after.type === 'CLEF' && after.accountId === 'acct123' && after.apiKey === 'secret');
+  check('the last screen shows how to get back', (await page.textContent('.welcome-lead')).includes('hold the YouTube logo'));
+  await page.waitForTimeout(1500);
+  await shot(page, '03b-all-set');
+  await page.click('[data-go]');
   check('finishing setup goes back to videos', (await log(page)).includes('finishSetup'));
   check('no page errors during setup', page.errors.length === 0);
   if (page.errors.length) console.log(page.errors);

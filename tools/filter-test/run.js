@@ -43,6 +43,8 @@ function check(name, cond) {
     window.__submitted = [];
     window.__blocks = [];
     window.__safetubeTestBlock = (req) => window.__blocks.push(req);
+    window.__parentOpened = 0;
+    window.__safetubeTestParent = () => window.__parentOpened++;
     window.SafeTubeAndroid = {
       config: () => JSON.stringify({ hideShorts: true, hideComments: true }),
       submit: (json) => window.__submitted.push(...JSON.parse(json)),
@@ -187,6 +189,27 @@ function check(name, cond) {
   await page.click('#st-sheet >> text=Cancel');
   check('Cancel closes the menu without blocking',
     (await page.$('#st-sheet')) === null && (await page.evaluate(() => window.__blocks.length)) === 0);
+
+  // 9b. Holding the YouTube logo for three seconds opens the parent settings; a tap does not.
+  const touch = (type, x, y) => page.evaluate(([type, x, y]) => {
+    const ev = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(ev, 'touches', { value: type === 'touchend' ? [] : [{ clientX: x, clientY: y }] });
+    document.elementFromPoint(x, y).dispatchEvent(ev);
+  }, [type, x, y]);
+  await touch('touchstart', 30, 20);
+  await page.waitForTimeout(1000);
+  check('holding the logo shows a ring after a moment', (await page.$('#st-ring')) !== null);
+  await touch('touchend', 30, 20);
+  await page.waitForTimeout(2300);
+  check('letting go early does not open settings',
+    (await page.evaluate(() => window.__parentOpened)) === 0 && (await page.$('#st-ring')) === null);
+  await touch('touchstart', 30, 20);
+  await page.waitForTimeout(3200);
+  check('holding the logo for three seconds opens settings', (await page.evaluate(() => window.__parentOpened)) === 1);
+  await touch('touchstart', 400, 600);
+  await page.waitForTimeout(3200);
+  check('holding elsewhere does not', (await page.evaluate(() => window.__parentOpened)) === 1);
+  await touch('touchend', 400, 600);
 
   // 10. Settings change: everything is re-checked.
   await page.evaluate(() => history.pushState({}, '', '/'));

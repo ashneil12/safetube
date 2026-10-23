@@ -126,4 +126,26 @@ class DecisionEngineTest {
         DecisionEngine(InMemoryVerdictStore(), { fake }, null, batchSize = 12).decide(many, aiSettings)
         assertEquals(3, fake.calls)
     }
+
+    @Test
+    fun `keyword answers arrive before the AI ones, and batches run side by side`() {
+        val many = (0 until 24).map { VideoInfo("v" + it.toString().padStart(10, '0'), "Song $it") }
+        val started = java.util.concurrent.CountDownLatch(3)
+        val slow = object : VideoClassifier {
+            override fun classify(videos: List<VideoInfo>, rules: String): List<Score> {
+                started.countDown()
+                // Only returns once all three batches are in flight together.
+                assertTrue(started.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                return videos.map { Score(it.id, 0.0, "fake") }
+            }
+        }
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(3)
+        val parts = java.util.Collections.synchronizedList(mutableListOf<List<Decision>>())
+        DecisionEngine(InMemoryVerdictStore(), { slow }, null, batchSize = 8, aiPool = pool)
+            .decide(listOf(pumpkins) + many, aiSettings.copy(blockedKeywords = listOf("halloween"))) { parts += it }
+        pool.shutdown()
+        assertEquals(listOf(pumpkins.id), parts.first().map { it.id })
+        assertEquals(4, parts.size)
+        assertEquals(25, parts.flatten().map { it.id }.toSet().size)
+    }
 }

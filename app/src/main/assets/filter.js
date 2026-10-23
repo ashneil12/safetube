@@ -8,6 +8,8 @@
  * Talks to the app through window.SafeTubeAndroid:
  *   config()      -> JSON string of page options
  *   submit(json)  <- batch of videos the page needs decisions for
+ *   block(json)   <- the hold menu asked to hide a video or channel
+ *   openParent()  <- the YouTube logo was held for three seconds
  * and the app answers by calling window.__safetube.apply({id: "allow"|"block"|"unknown"}).
  *
  * YouTube changes its markup often. If videos stop appearing, the selectors
@@ -39,6 +41,9 @@
     '.ytp-videowall-still', '.ytp-ce-element', '.ytp-autonav-endscreen-upnext-container'
   ];
   var CARD_SEL = CARD_SELECTORS.join(',');
+  // Holding the YouTube logo this long opens the parent settings.
+  var PARENT_HOLD_MS = 3000, RING_DELAY_MS = 500;
+  var LOGO_SEL = 'ytm-home-logo, .mobile-topbar-header-endpoint, ytd-topbar-logo-renderer, #logo, a[aria-label="YouTube Home"]';
   var VIDEO_LINK_SEL = 'a[href*="/watch?"], a[href*="/watch/"], a[href*="/shorts/"], a[href*="youtu.be/"], a[href*="/live/"]';
 
   var PLAYER_SEL = [
@@ -114,6 +119,14 @@
       'animation:st-spin .9s linear infinite}' +
       '@keyframes st-spin{to{transform:rotate(360deg)}}' +
       // Hold menu, like YouTube's own bottom sheet
+      // Grown-up door: a ring that fills while the logo is held
+      '#st-ring{position:fixed;z-index:2147483647;width:56px;height:56px;margin:-28px 0 0 -28px;border-radius:50%;' +
+      'pointer-events:none;border:3px solid rgba(128,128,128,.35);box-sizing:border-box;opacity:0;transform:scale(.6);' +
+      'transition:opacity .2s,transform .2s}' +
+      '#st-ring.on{opacity:1;transform:scale(1)}' +
+      '#st-ring svg{position:absolute;inset:-3px;width:56px;height:56px;transform:rotate(-90deg)}' +
+      '#st-ring circle{fill:none;stroke:#f00;stroke-width:3;stroke-dasharray:163;stroke-dashoffset:163}' +
+      '#st-ring.on circle{transition:stroke-dashoffset ' + (PARENT_HOLD_MS - RING_DELAY_MS) + 'ms linear;stroke-dashoffset:0}' +
       '#st-sheet-bg{position:fixed;inset:0;z-index:2147483646;background:rgba(0,0,0,.6)}' +
       '#st-sheet{position:fixed;left:0;right:0;bottom:0;z-index:2147483647;background:#fff;color:#0f0f0f;' +
       'border-radius:12px 12px 0 0;padding:8px 0;font:16px/1.4 Roboto,Arial,sans-serif;' +
@@ -469,8 +482,69 @@
   document.addEventListener('touchend', cancelHold, true);
   document.addEventListener('touchcancel', cancelHold, true);
 
+  // ---------------------------------------------------------------- grown-up door
+
+  // Hold the YouTube logo for three seconds to open the parent settings. Nothing shows
+  // for the first half second, so a child tapping the logo never notices it.
+  var door = null;
+
+  function closeDoor() {
+    if (!door) return;
+    clearTimeout(door.showTimer);
+    clearTimeout(door.openTimer);
+    if (door.ring) door.ring.remove();
+    door = null;
+  }
+
+  function onLogo(target, x, y) {
+    if (target && target.closest && target.closest(LOGO_SEL)) return true;
+    // YouTube renames its header often; the top-left corner is where the logo always sits.
+    return x < 150 && y < 56;
+  }
+
+  document.addEventListener('touchstart', function (e) {
+    if (e.touches.length !== 1) { closeDoor(); return; }
+    var t = e.touches[0];
+    if (!onLogo(e.target, t.clientX, t.clientY)) return;
+    closeDoor();
+    door = { x: t.clientX, y: t.clientY };
+    door.showTimer = setTimeout(function () {
+      var ring = el('div');
+      ring.id = 'st-ring';
+      ring.style.left = door.x + 'px';
+      ring.style.top = door.y + 'px';
+      var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('viewBox', '0 0 56 56');
+      var c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      c.setAttribute('cx', '28'); c.setAttribute('cy', '28'); c.setAttribute('r', '26');
+      svg.appendChild(c);
+      ring.appendChild(svg);
+      (document.body || document.documentElement).appendChild(ring);
+      door.ring = ring;
+      ring.getBoundingClientRect();
+      ring.classList.add('on');
+    }, RING_DELAY_MS);
+    door.openTimer = setTimeout(function () {
+      closeDoor();
+      suppressClickUntil = Date.now() + 800;
+      if (bridge && bridge.openParent) {
+        try { bridge.openParent(); } catch (err) { log('openParent failed ' + err); }
+      } else if (window.__safetubeTestParent) {
+        window.__safetubeTestParent();
+      }
+    }, PARENT_HOLD_MS);
+  }, { capture: true, passive: true });
+  document.addEventListener('touchmove', function (e) {
+    if (!door) return;
+    var t = e.touches[0];
+    if (Math.abs(t.clientX - door.x) > 12 || Math.abs(t.clientY - door.y) > 12) closeDoor();
+  }, { capture: true, passive: true });
+  document.addEventListener('touchend', closeDoor, true);
+  document.addEventListener('touchcancel', closeDoor, true);
+
   // Long-press in the WebView (and right-click with a mouse) also fires contextmenu.
   document.addEventListener('contextmenu', function (e) {
+    if (door) { e.preventDefault(); return; }
     if (!cfg.blockMenu) return;
     var video = videoUnder(e.target);
     if (!video) return;

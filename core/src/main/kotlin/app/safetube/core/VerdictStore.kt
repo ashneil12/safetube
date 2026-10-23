@@ -23,7 +23,7 @@ class InMemoryVerdictStore : VerdictStore {
     val hidden = ArrayList<Pair<VideoInfo, Decision>>()
 
     override fun cachedScore(id: String, configHash: String) = scores["$configHash/$id"]
-    override fun saveScore(score: Score, configHash: String, video: VideoInfo) {
+    @Synchronized override fun saveScore(score: Score, configHash: String, video: VideoInfo) {
         scores["$configHash/${score.id}"] = score
     }
     override fun override(id: String) = overrides[id]

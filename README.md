@@ -48,15 +48,18 @@ is ever sent to the AI. SafeTube never sees any other traffic on the device.
    Sources** (for the Silk browser or your file manager).
 2. Download `SafeTube.apk` from this repository's **Releases** page (the "latest" release is
    rebuilt on every change) and open it.
-3. Open SafeTube. Setup takes about two minutes: choose a parent PIN, tap what to hide
+3. Open SafeTube. Setup takes about a minute: choose a parent PIN, tap what to hide
    (scary stuff, pranks, violence, unboxing...), and optionally add a smart checker.
-4. Recommended: in **Settings → Parental Controls** (or Amazon Kids), block the Silk browser
+4. To get back to the parent settings later, **hold the YouTube logo in the top-left corner
+   for three seconds**, or long-press the SafeTube app icon and choose **Parent settings**.
+   Both ask for your PIN.
+5. Recommended: in **Settings → Parental Controls** (or Amazon Kids), block the Silk browser
    and the YouTube app so SafeTube is the only way onto YouTube.
 
 ## Choosing an AI (optional)
 
 Without an AI, the keyword list and your blocked videos and channels still work, fully
-offline. Hold the faint lock in the top corner for two seconds, enter your PIN, open
+offline. Hold the YouTube logo for three seconds, enter your PIN, open
 **Smart checker**, and set up one or both of these:
 
 **Video checker** decides each video against your rules. Decision models are built for

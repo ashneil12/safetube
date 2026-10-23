@@ -111,7 +111,7 @@ svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-widt
 .preset[aria-pressed="true"] span { color: var(--ink-2); }
 .preset .tick { position: absolute; top: 14px; right: 14px; width: 24px; height: 24px; border-radius: 12px; background: var(--teal); color: #fff; display: none; align-items: center; justify-content: center; }
 .preset .tick svg.i { width: 13px; height: 13px; stroke-width: 3.5; }
-.preset[aria-pressed="true"] .tick { display: flex; }
+.preset[aria-pressed="true"] .tick { display: flex; animation: pop 0.3s cubic-bezier(.3,1.6,.5,1) both; }
 
 .field-label { display: block; margin-top: 26px; font-weight: 700; font-size: 16px; }
 .textarea, .input { width: 100%; border-radius: 14px; border: 1px solid var(--line-2); background: #FAFBFD; font-size: 15px; color: var(--ink); }
@@ -222,8 +222,59 @@ details.more summary { cursor: pointer; font-weight: 700; color: var(--teal); fo
 .paste { margin-top: 12px; display: flex; gap: 10px; }
 .paste .input { flex: 1; border-style: dashed; }
 
-.toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(20px); background: var(--night); color: #fff; padding: 14px 22px; border-radius: 16px; font-weight: 500; font-size: 15px; opacity: 0; transition: opacity 0.2s, transform 0.2s; pointer-events: none; max-width: calc(100% - 32px); text-align: center; z-index: 10; }
+.toast { box-shadow: 0 0 0 1px rgba(255,255,255,.14), 0 8px 24px rgba(0,0,0,.18); position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(20px); background: var(--night); color: #fff; padding: 14px 22px; border-radius: 16px; font-weight: 500; font-size: 15px; opacity: 0; transition: opacity 0.2s, transform 0.2s; pointer-events: none; max-width: calc(100% - 32px); text-align: center; z-index: 10; }
 .toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ---------- welcome and all-set */
+.welcome { min-height: 100vh; background: var(--night); color: #fff; display: flex; align-items: center; justify-content: center; padding: 40px 24px; }
+.welcome-in { width: 560px; max-width: 100%; }
+.welcome-logo svg { width: 64px; height: 64px; display: block; }
+.welcome h1 { margin-top: 28px; font-size: 46px; line-height: 1.05; letter-spacing: -0.02em; }
+.welcome-lead { margin: 14px 0 0; font-size: 19px; line-height: 1.5; color: var(--night-text); }
+.welcome-points { list-style: none; margin: 32px 0 36px; padding: 0; display: flex; flex-direction: column; gap: 18px; }
+.welcome-points li { display: flex; gap: 16px; align-items: flex-start; font-size: 17px; line-height: 1.45; color: var(--night-text); }
+.welcome-points li b { color: #fff; }
+.welcome-points svg.i { width: 26px; height: 26px; flex: none; color: var(--sun); margin-top: 1px; }
+.welcome-note { margin-top: 16px; font-size: 15px; color: #9CA3BA; line-height: 1.5; }
+.welcome-note b { color: #fff; }
+.welcome-note + .btn { margin-top: 28px; }
+.welcome .btn { height: 56px; padding: 0 28px; font-size: 17px; }
+.done-badge { width: 72px; height: 72px; border-radius: 36px; background: var(--teal); display: flex; align-items: center; justify-content: center; animation: pop 0.5s cubic-bezier(.3,1.6,.5,1) both; }
+.done-badge svg.i { width: 36px; height: 36px; stroke-width: 2.6; stroke-dasharray: 24; stroke-dashoffset: 24; animation: draw 0.4s 0.3s ease-out forwards; }
+/* A little YouTube screen showing the logo being held */
+.demo { margin: 28px 0 8px; border-radius: 18px; background: #0f0f0f; padding: 0 0 16px; overflow: hidden; border: 1px solid var(--night-2); }
+.demo-bar { height: 52px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; }
+.demo-logo { position: relative; display: flex; align-items: center; gap: 6px; font: 700 18px/1 Arial, sans-serif; letter-spacing: -0.04em; }
+.demo-play { width: 26px; height: 18px; border-radius: 5px; background: #f00; position: relative; }
+.demo-play::after { content: ""; position: absolute; left: 10px; top: 5px; border-left: 8px solid #fff; border-top: 4px solid transparent; border-bottom: 4px solid transparent; }
+.demo-ring { position: absolute; left: -10px; top: 50%; width: 46px; height: 46px; margin-top: -23px; border-radius: 50%; border: 3px solid rgba(255,255,255,.2); border-top-color: var(--sun); animation: hold 3.2s ease-in-out infinite; }
+.demo-icons { display: flex; gap: 14px; }
+.demo-icons i { width: 22px; height: 22px; border-radius: 11px; background: #3f3f3f; }
+.demo-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 0 16px; }
+.demo-tiles i { aspect-ratio: 16 / 9; border-radius: 10px; background: #272727; }
+@keyframes hold { 0% { opacity: 0; transform: scale(.6) rotate(0); } 15% { opacity: 1; transform: scale(1) rotate(0); } 80% { opacity: 1; transform: scale(1) rotate(720deg); } 100% { opacity: 0; transform: scale(1.2) rotate(720deg); } }
+@keyframes pop { from { transform: scale(0.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@keyframes draw { to { stroke-dashoffset: 0; } }
+
+/* ---------- motion: each screen rises in, a few pieces at a time */
+@keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+.welcome-in > *, .pin-copy > *, .setup-main > *, .main > * { animation: rise 0.42s cubic-bezier(.2,.8,.2,1) both; }
+.welcome-in > :nth-child(2), .pin-copy > :nth-child(2), .setup-main > :nth-child(2), .main > :nth-child(2) { animation-delay: 0.05s; }
+.welcome-in > :nth-child(3), .pin-copy > :nth-child(3), .setup-main > :nth-child(3), .main > :nth-child(3) { animation-delay: 0.1s; }
+.welcome-in > :nth-child(n+4), .pin-copy > :nth-child(n+4), .setup-main > :nth-child(n+4), .main > :nth-child(n+4) { animation-delay: 0.15s; }
+.keypad, .setup-side { animation: fade 0.35s ease-out both; }
+.presets .preset { animation: rise 0.4s cubic-bezier(.2,.8,.2,1) both; }
+.presets .preset:nth-child(2) { animation-delay: .04s; } .presets .preset:nth-child(3) { animation-delay: .08s; }
+.presets .preset:nth-child(4) { animation-delay: .12s; } .presets .preset:nth-child(5) { animation-delay: .16s; }
+.presets .preset:nth-child(6) { animation-delay: .2s; }
+.preset, .btn, .keypad button { transition: transform 0.12s, background 0.15s, border-color 0.15s; }
+.preset:active, .btn:active, .keypad button:active { transform: scale(0.96); }
+.pin-dots span { transition: background 0.12s, border-color 0.12s, transform 0.12s; }
+.pin-dots span.on { transform: scale(1.12); }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
 
 /* ---------- smaller tablets (Fire 7 in portrait, phones) */
 @media (max-width: 960px) {
@@ -247,6 +298,7 @@ details.more summary { cursor: pointer; font-weight: 700; color: var(--teal); fo
   .presets { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .pin-screen { gap: 36px; }
   .pin-copy h1 { font-size: 34px; }
+  .welcome h1 { font-size: 34px; }
 }
 @media (max-width: 560px) {
   .providers, .fields, .presets { grid-template-columns: minmax(0, 1fr); }

@@ -9,7 +9,6 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.Gravity
-import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -19,7 +18,6 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.ImageView
 import android.widget.FrameLayout
 import android.widget.ProgressBar
 import android.widget.Toast
@@ -30,6 +28,7 @@ import app.safetube.core.DecisionEngine
 import app.safetube.core.Verdict
 import app.safetube.core.YouTubeOEmbed
 import org.json.JSONObject
+import java.util.concurrent.Executors
 
 /**
  * The child's screen: normal YouTube in a WebView, with the filter script running on every page.
@@ -40,6 +39,8 @@ class MainActivity : Activity() {
     private lateinit var store: SqliteVerdictStore
     private lateinit var webView: WebView
     private lateinit var bridge: FilterBridge
+    /** AI batches and title look-ups run side by side here so a page fills in faster. */
+    private val aiPool = Executors.newFixedThreadPool(4)
     private lateinit var cover: View
     private lateinit var root: FrameLayout
     private var filterScript: String = ""
@@ -62,7 +63,6 @@ class MainActivity : Activity() {
         root.addView(webView, FrameLayout.LayoutParams(MATCH, MATCH))
         cover = buildCover()
         root.addView(cover, FrameLayout.LayoutParams(MATCH, MATCH))
-        root.addView(buildParentButton(), FrameLayout.LayoutParams(dp(44), dp(44), Gravity.TOP or Gravity.END))
         setContentView(root)
 
         CookieManager.getInstance().apply {
@@ -89,7 +89,7 @@ class MainActivity : Activity() {
             WebSettingsCompat.setRequestedWithHeaderOriginAllowList(webView.settings, emptySet())
         }
 
-        bridge = FilterBridge(webView, prefs, DecisionEngine(store), ::showAiError, ::onBlockRequest)
+        bridge = FilterBridge(webView, prefs, DecisionEngine(store, batchSize = 8, aiPool = aiPool), ::showAiError, ::onBlockRequest, ::openParent)
         webView.addJavascriptInterface(bridge, "SafeTubeAndroid")
 
         // Best case: the filter is in place before YouTube's own scripts run, so nothing unchecked
@@ -107,8 +107,16 @@ class MainActivity : Activity() {
 
         if (!prefs.hasPin) {
             startActivity(Intent(this, ParentActivity::class.java).putExtra(ParentActivity.EXTRA_SETUP, true))
+        } else if (intent?.action == ACTION_OPEN_PARENT) {
+            openParent()
         }
         if (savedInstanceState == null) webView.loadUrl(START_URL) else webView.restoreState(savedInstanceState)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // The app icon's "Parent settings" shortcut while the app is already open.
+        if (intent.action == ACTION_OPEN_PARENT) openParent()
     }
 
     override fun onResume() {
@@ -135,6 +143,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         bridge.shutdown()
+        aiPool.shutdownNow()
         webView.destroy()
         super.onDestroy()
     }
@@ -256,31 +265,12 @@ class MainActivity : Activity() {
         isClickable = true
     }
 
-    /** A faint lock in the corner. Hold it for two seconds to reach the parent settings. */
-    @SuppressLint("ClickableViewAccessibility")
-    private fun buildParentButton(): View = ImageView(this).apply {
-        setImageResource(R.drawable.ic_lock)
-        scaleType = ImageView.ScaleType.CENTER
-        alpha = 0.4f
-        contentDescription = "Parent settings (hold)"
-        val open = Runnable {
-            // Pass the page that's open so the parent can hide that video or channel in one tap.
-            startActivity(
-                Intent(this@MainActivity, ParentActivity::class.java)
-                    .putExtra(ParentActivity.EXTRA_CURRENT_URL, webView.url)
-            )
-        }
-        setOnTouchListener { v, e ->
-            when (e.actionMasked) {
-                MotionEvent.ACTION_DOWN -> { v.animate().alpha(0.9f).setDuration(2000).start(); v.postDelayed(open, 2000) }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    v.removeCallbacks(open)
-                    v.animate().cancel()
-                    v.alpha = 0.4f
-                }
-            }
-            true
-        }
+    /** Holding the YouTube logo for three seconds lands here (see filter.js). */
+    private fun openParent() {
+        // Pass the page that's open so the parent can hide that video or channel in one tap.
+        startActivity(
+            Intent(this, ParentActivity::class.java).putExtra(ParentActivity.EXTRA_CURRENT_URL, webView.url)
+        )
     }
 
     // ------------------------------------------------------------------ hold-to-block
@@ -359,6 +349,7 @@ class MainActivity : Activity() {
 
     companion object {
         const val START_URL = "https://m.youtube.com/"
+        const val ACTION_OPEN_PARENT = "app.safetube.OPEN_PARENT"
         private const val REQ_BLOCK = 1
         private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT

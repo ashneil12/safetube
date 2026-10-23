@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Long-press the app icon for a way into the parent settings. Still asks for the PIN. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="parent"
+        android:enabled="true"
+        android:icon="@drawable/ic_launcher"
+        android:shortcutShortLabel="@string/parent_settings">
+        <intent
+            android:action="app.safetube.OPEN_PARENT"
+            android:targetPackage="app.safetube"
+            android:targetClass="app.safetube.MainActivity" />
+    </shortcut>
+</shortcuts>

@@ -203,6 +203,46 @@
   ];
   const ENDING = 'Ordinary fairy tales and silly cartoons are fine.';
 
+  function welcome() {
+    app.innerHTML = `
+      <div class="welcome">
+        <div class="welcome-in">
+          <div class="welcome-logo">${LOGO}</div>
+          <h1>YouTube, minus the stuff you’ve said no to.</h1>
+          <ul class="welcome-points">
+            <li>${icon('play')}<span><b>Normal YouTube.</b> Your child sees the YouTube they know.</span></li>
+            <li>${icon('filter')}<span><b>Your rules.</b> Say what to hide in plain words. SafeTube checks every video.</span></li>
+            <li>${icon('lock')}<span><b>Locked with a PIN.</b> Only you can change what’s allowed.</span></li>
+          </ul>
+          <button class="btn btn-sun" data-go>Set it up ${icon('next')}</button>
+          <div class="welcome-note">Takes about a minute.</div>
+        </div>
+      </div>`;
+    app.querySelector('[data-go]').addEventListener('click', () => createPin(setupWhat, { setup: true, back: null }));
+  }
+
+  // The last setup screen: how to get back here, since the way in is deliberately hidden.
+  function allSet() {
+    app.innerHTML = `
+      <div class="welcome">
+        <div class="welcome-in">
+          <div class="done-badge">${icon('check')}</div>
+          <h1>You’re all set</h1>
+          <p class="welcome-lead">To get back to these settings, hold the YouTube logo for three seconds.</p>
+          <div class="demo" aria-hidden="true">
+            <div class="demo-bar">
+              <span class="demo-logo"><i class="demo-play"></i>YouTube<i class="demo-ring"></i></span>
+              <span class="demo-icons"><i></i><i></i></span>
+            </div>
+            <div class="demo-tiles"><i></i><i></i><i></i></div>
+          </div>
+          <p class="welcome-note">You can also long-press the SafeTube app icon and choose <b>Parent settings</b>.</p>
+          <button class="btn btn-sun" data-go>Start watching ${icon('play')}</button>
+        </div>
+      </div>`;
+    app.querySelector('[data-go]').addEventListener('click', () => B.finishSetup());
+  }
+
   function setupSide(step) {
     const steps = ['Create a parent PIN', 'Choose what to hide', 'Add a smart checker (optional)'];
     return `
@@ -216,7 +256,7 @@
             return `<li class="${cls}"><span class="n">${n}</span>${s}</li>`;
           }).join('')}
         </ol>
-        <div class="foot">You can change any of this later. Hold the lock in the corner of the YouTube screen for two seconds.</div>
+        <div class="foot">You can change any of this later.</div>
       </div>`;
   }
 
@@ -282,7 +322,7 @@
           <div id="checker-form"></div>
           <div class="setup-actions">
             <button class="btn btn-ghost" data-skip>Skip for now</button>
-            <button class="btn btn-primary" data-done>Start watching ${icon('play')}</button>
+            <button class="btn btn-primary" data-done>Finish ${icon('next')}</button>
           </div>
         </div>
       </div>`;
@@ -290,7 +330,7 @@
     const finish = (keepChecker) => {
       if (!keepChecker) S.settings.provider.type = 'NONE';
       save();
-      B.finishSetup();
+      allSet();
     };
     app.querySelector('[data-skip]').addEventListener('click', () => finish(false));
     app.querySelector('[data-done]').addEventListener('click', () => finish(true));
@@ -864,7 +904,7 @@
   // ------------------------------------------------------------------ start
 
   if (S.mode === 'setup') {
-    createPin(setupWhat, { setup: true, back: null });
+    welcome();
   } else if (S.mode === 'block') {
     const b = S.block;
     unlock(() => B.confirmBlock(), {

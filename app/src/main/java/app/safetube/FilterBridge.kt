@@ -27,6 +27,8 @@ class FilterBridge(
     private val onAiError: (String) -> Unit,
     /** Called on the main thread when someone uses the hold-to-block menu. */
     private val onBlockRequest: (BlockRequest) -> Unit,
+    /** Called on the main thread when the YouTube logo is held long enough. */
+    private val onOpenParent: () -> Unit,
 ) {
     data class BlockRequest(val channel: Boolean, val video: VideoInfo)
 
@@ -40,6 +42,12 @@ class FilterBridge(
     fun config(): String = prefs.pageConfigJson()
 
     @JavascriptInterface
+    fun openParent() {
+        if (!isYouTubeHost(currentHost)) return
+        main.post(onOpenParent)
+    }
+
+    @JavascriptInterface
     fun submit(json: String) {
         // Only YouTube pages may ask; the WebView never loads anything else, but be sure.
         if (!isYouTubeHost(currentHost)) return
@@ -47,17 +55,20 @@ class FilterBridge(
         if (videos.isEmpty()) return
         val settings = prefs.filterSettings()
         pool.execute {
-            val decisions = try {
-                engine.decide(videos, settings)
-            } catch (e: Exception) {
-                videos.map { Decision(it.id, Verdict.UNKNOWN, DecisionSource.ERROR, reason = e.toString()) }
+            val send = { decisions: List<Decision> ->
+                decisions.firstOrNull { it.source == DecisionSource.ERROR }?.let { onAiError(it.reason) }
+                prefs.recordChecked(decisions.count { it.verdict != Verdict.UNKNOWN })
+                val result = JSONObject()
+                decisions.forEach { result.put(it.id, it.verdict.wire) }
+                main.post {
+                    webView.evaluateJavascript("window.__safetube && window.__safetube.apply($result)", null)
+                }
             }
-            decisions.firstOrNull { it.source == DecisionSource.ERROR }?.let { onAiError(it.reason) }
-            prefs.recordChecked(decisions.count { it.verdict != Verdict.UNKNOWN })
-            val result = JSONObject()
-            decisions.forEach { result.put(it.id, it.verdict.wire) }
-            main.post {
-                webView.evaluateJavascript("window.__safetube && window.__safetube.apply($result)", null)
+            try {
+                // Keyword and cached answers reach the page at once; AI answers follow batch by batch.
+                engine.decide(videos, settings, send)
+            } catch (e: Exception) {
+                send(videos.map { Decision(it.id, Verdict.UNKNOWN, DecisionSource.ERROR, reason = e.toString()) })
             }
         }
     }
