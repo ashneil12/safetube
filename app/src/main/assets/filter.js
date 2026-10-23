@@ -261,36 +261,44 @@
     installStyle();
     if (full !== false) full = true;
 
-    var cards = document.querySelectorAll(full ? CARD_SEL : NEW_CARD_SEL);
-    for (var i = 0; i < cards.length; i++) {
-      var card = cards[i];
-      var link = cardVideoLink(card);
-      var id = link ? idFromUrl(link.getAttribute('href')) : null;
-      if (!id) {
-        // Not a video (channel, playlist header, ad slot...). Shown as YouTube made it,
-        // but any video links inside it are still filtered individually below.
-        if (card.getAttribute('data-st') !== 'allow') {
-          card.setAttribute('data-st', 'allow');
-          card.removeAttribute('data-st-id');
-        }
-        continue;
-      }
-      if (mark(card, id) === 'pending') need(describe(card, link, id), false);
+    var roots = full || !dirty ? [document] : dirty;
+    dirty = [];
+    for (var r = 0; r < roots.length; r++) {
+      var root = roots[r];
+      if (root !== document && !root.isConnected) continue;
+      if (root !== document && root.matches(CARD_SEL)) scanCard(root);
+      var cards = root.querySelectorAll(full ? CARD_SEL : NEW_CARD_SEL);
+      for (var i = 0; i < cards.length; i++) scanCard(cards[i]);
+      if (root !== document && root.matches(VIDEO_LINK_SEL)) scanLink(root);
+      var links = root.querySelectorAll(full ? VIDEO_LINK_SEL : NEW_LINK_SEL);
+      for (var j = 0; j < links.length; j++) scanLink(links[j]);
     }
-
-    var links = document.querySelectorAll(full ? VIDEO_LINK_SEL : NEW_LINK_SEL);
-    for (var j = 0; j < links.length; j++) {
-      var a = links[j];
-      var lid = idFromUrl(a.getAttribute('href'));
-      if (!lid) { if (a.getAttribute('data-st') !== 'allow') a.setAttribute('data-st', 'allow'); continue; }
-      if (mark(a, lid) === 'pending') {
-        var host = a.closest(CARD_SEL) || a;
-        need(describe(host, a, lid), false);
-      }
-    }
-
     checkWatchPage();
   }
+
+  function scanCard(card) {
+    var link = cardVideoLink(card);
+    var id = link ? idFromUrl(link.getAttribute('href')) : null;
+    if (!id) {
+      // Not a video (channel, playlist header, ad slot...). Shown as YouTube made it,
+      // but any video links inside it are still filtered individually.
+      if (card.getAttribute('data-st') !== 'allow') {
+        card.setAttribute('data-st', 'allow');
+        card.removeAttribute('data-st-id');
+      }
+      return;
+    }
+    if (mark(card, id) === 'pending') need(describe(card, link, id), false);
+  }
+
+  function scanLink(a) {
+    var lid = idFromUrl(a.getAttribute('href'));
+    if (!lid) { if (a.getAttribute('data-st') !== 'allow') a.setAttribute('data-st', 'allow'); return; }
+    if (mark(a, lid) === 'pending') need(describe(a.closest(CARD_SEL) || a, a, lid), false);
+  }
+
+  // Elements added or changed since the last scan; null means "look everywhere".
+  var dirty = [];
 
   function scheduleScan() {
     if (scanScheduled) return;
@@ -298,17 +306,36 @@
     (window.requestAnimationFrame || setTimeout)(function () { scan(false); }, 16);
   }
 
-  /** YouTube reuses a card for a different video by changing its link; look at it afresh. */
+  /**
+   * Look only where YouTube changed something. A card reused for a different video (its link
+   * changed) is looked at afresh; cards nest, so every card around the link is cleared.
+   */
   function onMutations(records) {
     for (var i = 0; i < records.length; i++) {
       var r = records[i];
-      if (r.type !== 'attributes') continue;
-      var a = r.target;
-      if (a.removeAttribute) a.removeAttribute('data-st');
-      // Cards nest (a media item inside a grid item), so clear every one around the link.
-      for (var card = a.closest && a.closest(CARD_SEL); card; card = card.parentElement && card.parentElement.closest(CARD_SEL)) {
-        card.removeAttribute('data-st');
+      if (r.type === 'attributes') {
+        var a = r.target;
+        if (a.removeAttribute) a.removeAttribute('data-st');
+        var top = a;
+        for (var card = a.closest && a.closest(CARD_SEL); card; card = card.parentElement && card.parentElement.closest(CARD_SEL)) {
+          card.removeAttribute('data-st');
+          top = card;
+        }
+        if (dirty) dirty.push(top);
+      } else if (dirty) {
+        for (var j = 0; j < r.addedNodes.length; j++) {
+          var n = r.addedNodes[j];
+          if (n.nodeType !== 1) continue;
+          // A new link inside an existing card can change which video that card is.
+          var outer = n.parentElement && n.parentElement.closest(CARD_SEL);
+          if (outer && n.querySelector && (n.matches(VIDEO_LINK_SEL) || n.querySelector(VIDEO_LINK_SEL))) {
+            outer.removeAttribute('data-st');
+            dirty.push(outer);
+          }
+          dirty.push(n);
+        }
       }
+      if (dirty && dirty.length > 300) dirty = null; // a whole new page: one sweep is cheaper
     }
     scheduleScan();
   }
@@ -663,7 +690,10 @@
         retryAt[id] = now + RETRY_MS;
       }
     });
-    scan();
+    // Only elements still waiting can change; re-marking those is far cheaper than a full scan.
+    var waiting = document.querySelectorAll('[data-st="pending"]');
+    for (var i = 0; i < waiting.length; i++) mark(waiting[i], waiting[i].getAttribute('data-st-id'));
+    checkWatchPage();
   }
 
   /** Forget everything (rules changed) and re-check what's on screen. */
@@ -710,7 +740,7 @@
     };
   });
   // Belt and braces: YouTube sometimes swaps content without mutations we can see.
-  setInterval(function () { if (!document.hidden) scan(); }, 1000);
+  setInterval(function () { if (!document.hidden) scan(); }, 1500);
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { scan(); });
   scan();
 })();
