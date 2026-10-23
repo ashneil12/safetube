@@ -42,7 +42,34 @@ final class SqliteVerdictStore: VerdictStore {
         exec("CREATE TABLE IF NOT EXISTS overrides (id TEXT PRIMARY KEY, verdict TEXT NOT NULL, title TEXT, ts INTEGER NOT NULL, " +
              "who TEXT NOT NULL DEFAULT 'parent')")
         exec("CREATE TABLE IF NOT EXISTS hidden (id TEXT PRIMARY KEY, title TEXT, channel TEXT, reason TEXT, p REAL, ts INTEGER NOT NULL)")
+        exec("CREATE TABLE IF NOT EXISTS history (id TEXT PRIMARY KEY, title TEXT, channel TEXT, channelId TEXT, ts INTEGER NOT NULL)")
     }
+
+    // ------------------------------------------------------------------ watch history
+
+    struct Watched {
+        let id: String
+        let title: String
+        let channel: String
+        let channelId: String
+        let ts: Int64
+    }
+
+    /// Remembers a watched video for the parent's list; the newest 300 are kept.
+    func recordWatched(_ v: Watched) {
+        lock.lock(); defer { lock.unlock() }
+        run("INSERT OR REPLACE INTO history (id, title, channel, channelId, ts) VALUES (?, ?, ?, ?, ?)",
+            [v.id, v.title, v.channel, v.channelId, v.ts])
+        run("DELETE FROM history WHERE id NOT IN (SELECT id FROM history ORDER BY ts DESC LIMIT 300)", [])
+    }
+
+    func history(limit: Int = 100) -> [Watched] {
+        query("SELECT id, title, channel, channelId, ts FROM history ORDER BY ts DESC LIMIT \(limit)", []) { s in
+            Watched(id: text(s, 0), title: text(s, 1), channel: text(s, 2), channelId: text(s, 3), ts: sqlite3_column_int64(s, 4))
+        }
+    }
+
+    func clearHistory() { run("DELETE FROM history", []) }
 
     // ------------------------------------------------------------------ VerdictStore
 

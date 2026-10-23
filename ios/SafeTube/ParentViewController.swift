@@ -113,6 +113,8 @@ final class ParentViewController: UIViewController, WKNavigationDelegate, WKUIDe
             blockChannel: function (json) { ask('blockChannel', [s(json)]); },
             unblockChannel: function (entry) { ask('unblockChannel', [s(entry)]); },
             forgetAi: function () { ask('forgetAi', []); },
+            addTime: function (minutes) { ask('addTime', [Number(minutes) || 0]); },
+            clearHistory: function () { ask('clearHistory', []); },
             openLink: function (url) { ask('openLink', [s(url)]); },
             finishSetup: function () { ask('finishSetup', []); },
             close: function () { ask('close', []); },
@@ -194,6 +196,12 @@ final class ParentViewController: UIViewController, WKNavigationDelegate, WKUIDe
             changed { prefs.removeBlockedChannel(entry) }
         case "forgetAi":
             changed { store.clearDecisions() }
+        case "addTime":
+            // "A few more minutes" from the parent, for the daily limit or bedtime.
+            let minutes = min(max(Int(arg(0)) ?? 15, 1), 240)
+            changed { prefs.addExtraMinutes(minutes) }
+        case "clearHistory":
+            changed { store.clearHistory() }
         case "openLink":
             let link = arg(0)
             if link.hasPrefix("https://"), let url = URL(string: link) {
@@ -244,7 +252,16 @@ final class ParentViewController: UIViewController, WKNavigationDelegate, WKUIDe
         let choices = store.parentChoices()
         let byChild = Set(choices.filter { $0.verdict == .block && $0.by == "child" }.map { $0.id })
         let result: [String: Any] = [
-            "stats": ["checkedToday": prefs.checkedToday(), "hiddenToday": store.hiddenSince(startOfToday())],
+            "stats": [
+                "checkedToday": prefs.checkedToday(),
+                "hiddenToday": store.hiddenSince(startOfToday()),
+                "watchedMin": prefs.watchedTodaySec / 60,
+                "limitMin": prefs.dailyLimitMin > 0 ? prefs.dailyLimitMin + prefs.extraTodayMin : 0,
+                "timeUp": JSON.orNull(prefs.timeUp()),
+            ] as [String: Any],
+            "history": store.history().map { h -> [String: Any] in
+                ["id": h.id, "title": h.title, "channel": h.channel, "channelId": h.channelId, "ts": h.ts]
+            },
             "hidden": store.recentlyHidden().map { h -> [String: Any] in
                 ["id": h.id, "title": h.title, "channel": h.channel, "reason": byChild.contains(h.id) ? "Set by child" : h.reason]
             },
@@ -281,6 +298,14 @@ final class ParentViewController: UIViewController, WKNavigationDelegate, WKUIDe
         prefs.hideComments = JSON.optBool(o, "hideComments", true)
         prefs.kidsCanBlock = JSON.optBool(o, "kidsCanBlock", true)
         prefs.blockAds = JSON.optBool(o, "blockAds", true)
+        prefs.noAutoplay = JSON.optBool(o, "noAutoplay", true)
+        prefs.restrictedMode = JSON.optBool(o, "restrictedMode", false)
+        prefs.keepHistory = JSON.optBool(o, "keepHistory", true)
+        prefs.dailyLimitMin = JSON.optDouble(o, "dailyLimitMin").map { Int($0) } ?? 0
+        prefs.bedtimeOn = JSON.optBool(o, "bedtimeOn", false)
+        prefs.bedtimeStart = o["bedtimeStart"] == nil ? "19:30" : JSON.optString(o, "bedtimeStart")
+        prefs.bedtimeEnd = o["bedtimeEnd"] == nil ? "07:00" : JSON.optString(o, "bedtimeEnd")
+        if !prefs.keepHistory { store.clearHistory() }
         prefs.bumpVersion()
     }
 
@@ -340,6 +365,13 @@ final class ParentViewController: UIViewController, WKNavigationDelegate, WKUIDe
             "hideComments": prefs.hideComments,
             "kidsCanBlock": prefs.kidsCanBlock,
             "blockAds": prefs.blockAds,
+            "noAutoplay": prefs.noAutoplay,
+            "restrictedMode": prefs.restrictedMode,
+            "keepHistory": prefs.keepHistory,
+            "dailyLimitMin": prefs.dailyLimitMin,
+            "bedtimeOn": prefs.bedtimeOn,
+            "bedtimeStart": prefs.bedtimeStart,
+            "bedtimeEnd": prefs.bedtimeEnd,
         ]
     }
 

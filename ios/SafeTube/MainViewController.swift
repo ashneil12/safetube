@@ -92,9 +92,14 @@ final class MainViewController: UIViewController, WKNavigationDelegate, WKUIDele
         seenVersion = prefs.version
         // Load once the ad rules are in place, so the first page doesn't reach the ad servers.
         let first = launchUrl()
-        applyAdBlocking { [weak self] in self?.webView.load(URLRequest(url: first)) }
+        applyAdBlocking { [weak self] in
+            self?.applyRestrictedMode { _ in self?.webView.load(URLRequest(url: first)) }
+        }
 
         let nc = NotificationCenter.default
+        nc.addObserver(self, selector: #selector(startTicking), name: UIApplication.didBecomeActiveNotification, object: nil)
+        nc.addObserver(self, selector: #selector(stopTicking), name: UIApplication.willResignActiveNotification, object: nil)
+        startTicking()
         nc.addObserver(self, selector: #selector(rememberPage), name: UIApplication.willResignActiveNotification, object: nil)
         nc.addObserver(self, selector: #selector(rememberPage), name: UIApplication.didEnterBackgroundNotification, object: nil)
     }
@@ -187,7 +192,8 @@ final class MainViewController: UIViewController, WKNavigationDelegate, WKUIDele
                 config: function () { return cfg; },
                 submit: function (json) { post({ kind: 'submit', json: String(json) }); },
                 block: function (json) { post({ kind: 'block', json: String(json) }); },
-                openParent: function () { post({ kind: 'openParent' }); }
+                openParent: function () { post({ kind: 'openParent' }); },
+                watched: function (json) { post({ kind: 'watched', json: String(json) }); }
               };
               // iOS: no callout or text selection on long-press, so SafeTube's hold menu and the
               // logo hold for parent settings get the touch instead.
@@ -220,8 +226,25 @@ final class MainViewController: UIViewController, WKNavigationDelegate, WKUIDele
         case "submit": submit(JSON.optString(body, "json"))
         case "block": block(JSON.optString(body, "json"))
         case "openParent": openParent()
+        case "watched": watched(JSON.optString(body, "json"))
         default: break
         }
+    }
+
+    /// The child has been on a video's page for a few seconds: add it to the parent's history.
+    private func watched(_ json: String) {
+        guard prefs.keepHistory, let o = JSON.object(json) else { return }
+        let id = JSON.optString(o, "id")
+        guard VideoInfo.isValidId(id) else { return }
+        let entry = SqliteVerdictStore.Watched(
+            id: id,
+            title: String(JSON.optString(o, "title").prefix(300)),
+            channel: String(JSON.optString(o, "channel").prefix(120)),
+            channelId: ChannelBlocklist.normalizeId(JSON.optString(o, "channelId")) ?? "",
+            ts: Int64(Date().timeIntervalSince1970 * 1000)
+        )
+        let store = self.store
+        DispatchQueue.global(qos: .utility).async { store.recordWatched(entry) }
     }
 
     private func submit(_ json: String) {
@@ -285,8 +308,163 @@ final class MainViewController: UIViewController, WKNavigationDelegate, WKUIDele
         seenVersion = prefs.version
         installScripts(webView.configuration.userContentController)
         applyAdBlocking()
-        webView.evaluateJavaScript("window.__safetube && window.__safetube.reset(\(prefs.pageConfigJson()))", completionHandler: nil)
+        let config = prefs.pageConfigJson()
+        applyRestrictedMode { [weak self] changed in
+            guard let self = self else { return }
+            if changed {
+                self.webView.reload()
+            } else {
+                self.webView.evaluateJavaScript("window.__safetube && window.__safetube.reset(\(config))", completionHandler: nil)
+            }
+        }
     }
+
+    // ------------------------------------------------------------------ restricted mode
+
+    /// YouTube's Restricted Mode lives in its PREF cookie (the f2 flag). Setting it in this web
+    /// view's own cookie store changes only SafeTube on this device; the Google account and other
+    /// devices are untouched. Calls back with true if the cookie changed (the page needs a reload).
+    private func applyRestrictedMode(_ done: @escaping (Bool) -> Void) {
+        let cookies = webView.configuration.websiteDataStore.httpCookieStore
+        let wantOn = prefs.restrictedMode
+        cookies.getAllCookies { all in
+            let prefCookies = all.filter { $0.name == "PREF" && MainViewController.isYouTubeHost($0.domain.hasPrefix(".") ? String($0.domain.dropFirst()) : $0.domain) }
+            let existing = prefCookies.first { $0.domain == ".youtube.com" } ?? prefCookies.first
+            let current = existing?.value ?? ""
+            var parts = current.split(separator: "&").map(String.init).filter { !$0.isBlank && !$0.hasPrefix("f2=") }
+            if wantOn { parts.append("f2=8000000") }
+            let wanted = parts.joined(separator: "&")
+            if wanted == current {
+                DispatchQueue.main.async { done(false) }
+                return
+            }
+            let props: [HTTPCookiePropertyKey: Any] = [
+                .name: "PREF", .value: wanted, .domain: ".youtube.com", .path: "/", .secure: "TRUE",
+                .expires: Date().addingTimeInterval(2 * 365 * 24 * 3600),
+            ]
+            guard let cookie = HTTPCookie(properties: props) else {
+                DispatchQueue.main.async { done(false) }
+                return
+            }
+            // A host-only PREF on www/m.youtube.com would shadow the one we set; drop those.
+            let stale = prefCookies.filter { $0.domain != ".youtube.com" }
+            let group = DispatchGroup()
+            for c in stale { group.enter(); cookies.delete(c) { group.leave() } }
+            group.enter()
+            cookies.setCookie(cookie) { group.leave() }
+            group.notify(queue: .main) { done(true) }
+        }
+    }
+
+    // ------------------------------------------------------------------ screen time
+
+    private var ticker: Timer?
+    private var lastTick = Date()
+    private var timeUpView: UIView?
+    private var timeUpTitle: UILabel?
+
+    /// Counts viewing time while YouTube is on screen and closes it when time is up (every 15 s,
+    /// like MainActivity's tick).
+    @objc private func startTicking() {
+        lastTick = Date()
+        ticker?.invalidate()
+        ticker = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in self?.tick() }
+        tick()
+    }
+
+    @objc private func stopTicking() {
+        countTime()
+        ticker?.invalidate()
+        ticker = nil
+    }
+
+    private func tick() {
+        countTime()
+        showTimeUp(prefs.timeUp())
+    }
+
+    private func countTime() {
+        let now = Date()
+        let sec = min(max(Int(now.timeIntervalSince(lastTick)), 0), 60)
+        lastTick = now
+        // Time in the parent screens or behind the time-up screen doesn't count.
+        if sec > 0 && timeUpView == nil && presentedViewController == nil && UIApplication.shared.applicationState == .active {
+            prefs.addWatched(sec)
+        }
+    }
+
+    private func showTimeUp(_ reason: String?) {
+        guard let reason = reason else {
+            timeUpView?.removeFromSuperview()
+            timeUpView = nil
+            return
+        }
+        if let label = timeUpTitle, timeUpView != nil {
+            label.text = MainViewController.timeUpText(reason)
+            return
+        }
+        webView.evaluateJavaScript(
+            "document.querySelectorAll('video').forEach(function(v){try{v.pause();if(v.webkitExitFullscreen)v.webkitExitFullscreen();if(document.webkitExitFullscreen)document.webkitExitFullscreen();}catch(e){}})",
+            completionHandler: nil)
+        let navy = UIColor(red: 0x14 / 255.0, green: 0x18 / 255.0, blue: 0x2B / 255.0, alpha: 1)
+        let cover = UIView()
+        cover.backgroundColor = navy
+        cover.translatesAutoresizingMaskIntoConstraints = false
+
+        let moon = UIImageView(image: UIImage(systemName: "moon.stars.fill"))
+        moon.tintColor = UIColor(red: 1, green: 0xC8 / 255.0, blue: 0x45 / 255.0, alpha: 1)
+        moon.contentMode = .scaleAspectFit
+        let title = UILabel()
+        title.text = MainViewController.timeUpText(reason)
+        title.font = .systemFont(ofSize: 34, weight: .bold)
+        title.textColor = .white
+        title.textAlignment = .center
+        title.numberOfLines = 0
+        let sub = UILabel()
+        sub.text = "See you next time! Ask a grown-up if you need a few more minutes."
+        sub.font = .systemFont(ofSize: 18)
+        sub.textColor = UIColor(red: 0xC9 / 255.0, green: 0xCE / 255.0, blue: 0xDD / 255.0, alpha: 1)
+        sub.textAlignment = .center
+        sub.numberOfLines = 0
+        let button = UIButton(type: .system)
+        button.setTitle("Grown-ups", for: .normal)
+        button.titleLabel?.font = .systemFont(ofSize: 17, weight: .semibold)
+        button.setTitleColor(navy, for: .normal)
+        button.backgroundColor = UIColor(red: 1, green: 0xC8 / 255.0, blue: 0x45 / 255.0, alpha: 1)
+        button.layer.cornerRadius = 28
+        button.contentEdgeInsets = UIEdgeInsets(top: 0, left: 28, bottom: 0, right: 28)
+        button.addTarget(self, action: #selector(grownUps), for: .touchUpInside)
+
+        let stack = UIStackView(arrangedSubviews: [moon, title, sub, button])
+        stack.axis = .vertical
+        stack.alignment = .center
+        stack.spacing = 16
+        stack.setCustomSpacing(28, after: moon)
+        stack.setCustomSpacing(40, after: sub)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        cover.addSubview(stack)
+        view.addSubview(cover)
+        NSLayoutConstraint.activate([
+            cover.topAnchor.constraint(equalTo: view.topAnchor),
+            cover.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            cover.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            cover.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            moon.widthAnchor.constraint(equalToConstant: 96),
+            moon.heightAnchor.constraint(equalToConstant: 96),
+            button.heightAnchor.constraint(equalToConstant: 56),
+            stack.centerYAnchor.constraint(equalTo: cover.centerYAnchor),
+            stack.leadingAnchor.constraint(equalTo: cover.leadingAnchor, constant: 32),
+            stack.trailingAnchor.constraint(equalTo: cover.trailingAnchor, constant: -32),
+        ])
+        timeUpView = cover
+        timeUpTitle = title
+    }
+
+    private static func timeUpText(_ reason: String) -> String {
+        reason == "bedtime" ? "It's bedtime" : "That's all the YouTube for today"
+    }
+
+    @objc private func grownUps() { openParent() }
 
     // ------------------------------------------------------------------ navigation
 
@@ -390,7 +568,12 @@ final class MainViewController: UIViewController, WKNavigationDelegate, WKUIDele
     }
 
     private func presentParent(_ vc: ParentViewController) {
-        vc.onClose = { [weak self] in self?.applySettingsIfChanged() }
+        vc.onClose = { [weak self] in
+            self?.applySettingsIfChanged()
+            // More time, or a new limit or bedtime, takes effect straight away.
+            self?.lastTick = Date()
+            self?.tick()
+        }
         present(vc, animated: true)
     }
 

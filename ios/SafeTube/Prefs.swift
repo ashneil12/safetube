@@ -133,6 +133,107 @@ final class Prefs {
         version += 1
     }
 
+    /// Stop YouTube moving on to another video by itself when one ends.
+    var noAutoplay: Bool {
+        get { bool("noAutoplay", true) }
+        set { sp.set(newValue, forKey: "noAutoplay") }
+    }
+
+    /// YouTube's Restricted Mode, set only in this app's own browser: never on the Google account.
+    var restrictedMode: Bool {
+        get { bool("restrictedMode", false) }
+        set { sp.set(newValue, forKey: "restrictedMode") }
+    }
+
+    /// Keep a list of watched videos for the parent. Stays on this device.
+    var keepHistory: Bool {
+        get { bool("keepHistory", true) }
+        set { sp.set(newValue, forKey: "keepHistory") }
+    }
+
+    // ---- screen time (same rules as Prefs.kt)
+
+    private func int(_ key: String, _ fallback: Int) -> Int { sp.object(forKey: key) == nil ? fallback : sp.integer(forKey: key) }
+    private func long(_ key: String) -> Int64 { (sp.object(forKey: key) as? NSNumber)?.int64Value ?? 0 }
+    private func nowMs() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
+
+    /// Minutes of YouTube a day; 0 means no limit.
+    var dailyLimitMin: Int {
+        get { int("dailyLimitMin", 0) }
+        set { sp.set(min(max(newValue, 0), 24 * 60), forKey: "dailyLimitMin") }
+    }
+
+    var bedtimeOn: Bool {
+        get { bool("bedtimeOn", false) }
+        set { sp.set(newValue, forKey: "bedtimeOn") }
+    }
+
+    /// "HH:MM", 24-hour. YouTube is off from bedtimeStart until bedtimeEnd.
+    var bedtimeStart: String {
+        get { string("bedtimeStart", "19:30") }
+        set { sp.set(Prefs.validTime(newValue, "19:30"), forKey: "bedtimeStart") }
+    }
+
+    var bedtimeEnd: String {
+        get { string("bedtimeEnd", "07:00") }
+        set { sp.set(Prefs.validTime(newValue, "07:00"), forKey: "bedtimeEnd") }
+    }
+
+    /// Seconds watched today.
+    var watchedTodaySec: Int { sp.integer(forKey: "watchedDay") == dayKey() ? sp.integer(forKey: "watchedSec") : 0 }
+
+    func addWatched(_ seconds: Int) {
+        lock.lock(); defer { lock.unlock() }
+        let total = watchedTodaySec + seconds
+        sp.set(dayKey(), forKey: "watchedDay")
+        sp.set(total, forKey: "watchedSec")
+    }
+
+    /// Extra minutes a parent granted today on top of the daily limit.
+    var extraTodayMin: Int { sp.integer(forKey: "extraDay") == dayKey() ? sp.integer(forKey: "extraMin") : 0 }
+
+    /// Bedtime is paused until this time (ms) after a parent gives a few more minutes.
+    var bedtimeExtendedUntil: Int64 {
+        get { long("bedtimeExtendedUntil") }
+        set { sp.set(NSNumber(value: newValue), forKey: "bedtimeExtendedUntil") }
+    }
+
+    /// A parent's "a few more minutes": works for both the daily limit and bedtime.
+    func addExtraMinutes(_ minutes: Int) {
+        let extra = extraTodayMin + minutes
+        sp.set(dayKey(), forKey: "extraDay")
+        sp.set(extra, forKey: "extraMin")
+        bedtimeExtendedUntil = max(nowMs(), bedtimeExtendedUntil) + Int64(minutes) * 60_000
+    }
+
+    /// Why YouTube should be closed right now ("bedtime" or "limit"), or nil if it's fine to watch.
+    func timeUp(_ now: Date = Date()) -> String? {
+        let ms = Int64(now.timeIntervalSince1970 * 1000)
+        if bedtimeOn && ms > bedtimeExtendedUntil && inBedtime(now) { return "bedtime" }
+        let limit = dailyLimitMin
+        if limit > 0 && watchedTodaySec >= (limit + extraTodayMin) * 60 { return "limit" }
+        return nil
+    }
+
+    private func inBedtime(_ now: Date) -> Bool {
+        let c = Calendar.current.dateComponents([.hour, .minute], from: now)
+        let m = (c.hour ?? 0) * 60 + (c.minute ?? 0)
+        let start = Prefs.minutes(bedtimeStart), end = Prefs.minutes(bedtimeEnd)
+        return start <= end ? (m >= start && m < end) : (m >= start || m < end)
+    }
+
+    private static func minutes(_ hhmm: String) -> Int {
+        let p = hhmm.split(separator: ":").compactMap { Int($0) }
+        return p.count == 2 ? p[0] * 60 + p[1] : 0
+    }
+
+    private static let timePattern = try! NSRegularExpression(pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$")
+
+    private static func validTime(_ v: String, _ fallback: String) -> String {
+        let t = v.trimmed
+        return timePattern.firstMatch(in: t, range: NSRange(location: 0, length: (t as NSString).length)) != nil ? t : fallback
+    }
+
     // ---- where the child was, so a relaunch carries on instead of starting over
 
     var lastUrl: String? { sp.string(forKey: "lastUrl") }
@@ -207,6 +308,8 @@ final class Prefs {
             "blockMenu": true,
             "kidsCanBlock": kidsCanBlock,
             "blockAds": blockAds,
+            "noAutoplay": noAutoplay,
+            "keepHistory": keepHistory,
             "debug": false,
         ])
     }
