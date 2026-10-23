@@ -246,12 +246,22 @@
 
   // ---------------------------------------------------------------- scanning
 
-  function scan() {
+  // Elements the page hasn't looked at yet. Cheap enough to check on every change.
+  var NEW_CARD_SEL = CARD_SELECTORS.map(function (s) { return s + ':not([data-st])'; }).join(',');
+  var NEW_LINK_SEL = VIDEO_LINK_SEL.split(',').map(function (s) { return s.trim() + ':not([data-st])'; }).join(',');
+
+  /**
+   * full: look at every video on the page (after answers arrive, and once a second).
+   * Otherwise only at elements that are new or that YouTube reused for another video, which
+   * keeps scrolling smooth on slow tablets. Either way, anything unchecked stays hidden by CSS.
+   */
+  function scan(full) {
     scanScheduled = false;
     if (!document.documentElement) return;
     installStyle();
+    if (full !== false) full = true;
 
-    var cards = document.querySelectorAll(CARD_SEL);
+    var cards = document.querySelectorAll(full ? CARD_SEL : NEW_CARD_SEL);
     for (var i = 0; i < cards.length; i++) {
       var card = cards[i];
       var link = cardVideoLink(card);
@@ -268,7 +278,7 @@
       if (mark(card, id) === 'pending') need(describe(card, link, id), false);
     }
 
-    var links = document.querySelectorAll(VIDEO_LINK_SEL);
+    var links = document.querySelectorAll(full ? VIDEO_LINK_SEL : NEW_LINK_SEL);
     for (var j = 0; j < links.length; j++) {
       var a = links[j];
       var lid = idFromUrl(a.getAttribute('href'));
@@ -285,7 +295,22 @@
   function scheduleScan() {
     if (scanScheduled) return;
     scanScheduled = true;
-    (window.requestAnimationFrame || setTimeout)(scan, 16);
+    (window.requestAnimationFrame || setTimeout)(function () { scan(false); }, 16);
+  }
+
+  /** YouTube reuses a card for a different video by changing its link; look at it afresh. */
+  function onMutations(records) {
+    for (var i = 0; i < records.length; i++) {
+      var r = records[i];
+      if (r.type !== 'attributes') continue;
+      var a = r.target;
+      if (a.removeAttribute) a.removeAttribute('data-st');
+      // Cards nest (a media item inside a grid item), so clear every one around the link.
+      for (var card = a.closest && a.closest(CARD_SEL); card; card = card.parentElement && card.parentElement.closest(CARD_SEL)) {
+        card.removeAttribute('data-st');
+      }
+    }
+    scheduleScan();
   }
 
   // ---------------------------------------------------------------- the video being watched
@@ -666,11 +691,11 @@
   // ---------------------------------------------------------------- start
 
   installStyle();
-  new MutationObserver(scheduleScan).observe(document, {
+  new MutationObserver(onMutations).observe(document, {
     childList: true, subtree: true, attributes: true, attributeFilter: ['href']
   });
   ['yt-navigate-start', 'yt-navigate-finish', 'state-navigatestart', 'state-navigateend', 'popstate', 'hashchange']
-    .forEach(function (ev) { window.addEventListener(ev, scheduleScan, true); });
+    .forEach(function (ev) { window.addEventListener(ev, function () { scan(); }, true); });
   ['pushState', 'replaceState'].forEach(function (fn) {
     var orig = history[fn];
     history[fn] = function () {
@@ -685,7 +710,7 @@
     };
   });
   // Belt and braces: YouTube sometimes swaps content without mutations we can see.
-  setInterval(scan, 1000);
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', scan);
+  setInterval(function () { if (!document.hidden) scan(); }, 1000);
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { scan(); });
   scan();
 })();

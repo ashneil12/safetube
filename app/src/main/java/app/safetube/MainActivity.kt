@@ -6,6 +6,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.Gravity
@@ -13,6 +14,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.CookieManager
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
@@ -51,7 +53,6 @@ class MainActivity : Activity() {
     private var lastErrorToast = 0L
     private var pendingBlock: FilterBridge.BlockRequest? = null
 
-    @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
@@ -59,11 +60,30 @@ class MainActivity : Activity() {
         filterScript = assets.open("filter.js").bufferedReader().use { it.readText() }
 
         root = FrameLayout(this)
-        webView = WebView(this)
-        root.addView(webView, FrameLayout.LayoutParams(MATCH, MATCH))
         cover = buildCover()
-        root.addView(cover, FrameLayout.LayoutParams(MATCH, MATCH))
         setContentView(root)
+        setUpWebView()
+        seenVersion = prefs.version
+
+        if (!prefs.hasPin) {
+            startActivity(Intent(this, ParentActivity::class.java).putExtra(ParentActivity.EXTRA_SETUP, true))
+        } else if (intent?.action == ACTION_OPEN_PARENT) {
+            openParent()
+        }
+        if (savedInstanceState == null || webView.restoreState(savedInstanceState) == null) webView.loadUrl(startUrl())
+    }
+
+    /** Builds the YouTube screen. Called again if the tablet runs low on memory and kills the page. */
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun setUpWebView() {
+        webView = WebView(this)
+        root.addView(webView, 0, FrameLayout.LayoutParams(MATCH, MATCH))
+        if (cover.parent == null) root.addView(cover, FrameLayout.LayoutParams(MATCH, MATCH))
+        if (Build.VERSION.SDK_INT >= 26) {
+            // Keep YouTube's page alive while the child is in another app, so coming back
+            // carries on where they were instead of reloading.
+            webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
+        }
 
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
@@ -103,14 +123,13 @@ class MainActivity : Activity() {
 
         webView.webViewClient = Client()
         webView.webChromeClient = Chrome()
-        seenVersion = prefs.version
+    }
 
-        if (!prefs.hasPin) {
-            startActivity(Intent(this, ParentActivity::class.java).putExtra(ParentActivity.EXTRA_SETUP, true))
-        } else if (intent?.action == ACTION_OPEN_PARENT) {
-            openParent()
-        }
-        if (savedInstanceState == null) webView.loadUrl(START_URL) else webView.restoreState(savedInstanceState)
+    /** Where the child was, if they left recently; otherwise YouTube's home page. */
+    private fun startUrl(): String {
+        val url = prefs.lastUrl
+        val fresh = System.currentTimeMillis() - prefs.lastUrlAt < RESUME_WITHIN_MS
+        return if (fresh && url != null && FilterBridge.isYouTubeHost(FilterBridge.hostOf(url))) url else START_URL
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -132,6 +151,7 @@ class MainActivity : Activity() {
     }
 
     override fun onPause() {
+        webView.url?.let { prefs.rememberPage(it) }
         webView.onPause()
         super.onPause()
     }
@@ -191,6 +211,23 @@ class MainActivity : Activity() {
             } else {
                 cover.visibility = View.GONE
             }
+        }
+
+        /**
+         * Fire tablets with little memory sometimes kill the page's renderer. Without this the
+         * whole app would crash; instead build a fresh YouTube screen at the same page.
+         */
+        @android.annotation.TargetApi(26)
+        override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+            val url = view.url
+            if (fullscreenView != null) exitFullscreen()
+            root.removeView(view)
+            bridge.shutdown()
+            view.destroy()
+            cover.visibility = View.VISIBLE
+            setUpWebView()
+            webView.loadUrl(url?.takeIf { FilterBridge.isYouTubeHost(FilterBridge.hostOf(it)) } ?: START_URL)
+            return true
         }
 
         override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
@@ -350,6 +387,7 @@ class MainActivity : Activity() {
     companion object {
         const val START_URL = "https://m.youtube.com/"
         const val ACTION_OPEN_PARENT = "app.safetube.OPEN_PARENT"
+        private const val RESUME_WITHIN_MS = 2 * 60 * 60 * 1000L
         private const val REQ_BLOCK = 1
         private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT

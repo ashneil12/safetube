@@ -101,6 +101,14 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("hideComments", true)
         set(v) = sp.edit().putBoolean("hideComments", v).apply()
 
+    /** The page the child was on, so a relaunch carries on instead of starting over. */
+    val lastUrl: String? get() = sp.getString("lastUrl", null)
+    val lastUrlAt: Long get() = sp.getLong("lastUrlAt", 0)
+
+    fun rememberPage(url: String) {
+        sp.edit().putString("lastUrl", url).putLong("lastUrlAt", System.currentTimeMillis()).apply()
+    }
+
     /** Bumped whenever settings change so open pages re-check what they show. */
     var version: Int
         get() = sp.getInt("version", 0)
