@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Covers YouTube when the day's viewing time is used up or it's bedtime. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#14182B"
+    android:clickable="true"
+    android:focusable="true"
+    android:gravity="center"
+    android:orientation="vertical"
+    android:padding="32dp">
+
+    <ImageView
+        android:layout_width="96dp"
+        android:layout_height="96dp"
+        android:contentDescription="@null"
+        android:src="@drawable/ic_moon" />
+
+    <TextView
+        android:id="@+id/time_up_title"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="28dp"
+        android:gravity="center"
+        android:textColor="#FFFFFF"
+        android:textSize="34sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:gravity="center"
+        android:text="@string/time_up_sub"
+        android:textColor="#C9CEDD"
+        android:textSize="18sp" />
+
+    <Button
+        android:id="@+id/time_up_parent"
+        android:layout_width="wrap_content"
+        android:layout_height="56dp"
+        android:layout_marginTop="40dp"
+        android:background="@drawable/btn_sun"
+        android:paddingStart="28dp"
+        android:paddingEnd="28dp"
+        android:text="@string/time_up_parent"
+        android:textAllCaps="false"
+        android:textColor="#14182B"
+        android:textSize="17sp" />
+</LinearLayout>

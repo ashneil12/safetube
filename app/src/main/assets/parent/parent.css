@@ -225,6 +225,16 @@ details.more summary { cursor: pointer; font-weight: 700; color: var(--teal); fo
 .toast { box-shadow: 0 0 0 1px rgba(255,255,255,.14), 0 8px 24px rgba(0,0,0,.18); position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(20px); background: var(--night); color: #fff; padding: 14px 22px; border-radius: 16px; font-weight: 500; font-size: 15px; opacity: 0; transition: opacity 0.2s, transform 0.2s; pointer-events: none; max-width: calc(100% - 32px); text-align: center; z-index: 10; }
 .toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
 
+/* ---------- time & extras */
+.seg-wide { grid-template-columns: repeat(6, minmax(0, 1fr)); margin: 10px 0 18px; }
+.times { display: flex; gap: 14px; margin-top: 10px; }
+.times[hidden] { display: none; }
+.times label { flex: 1; display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-weight: 500; color: var(--muted); }
+.extras { margin-top: 24px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.extras .card { margin: 0; }
+.card.banner { background: var(--sun-soft); border-color: var(--sun); }
+.stat .v small { font-size: 15px; font-weight: 500; color: var(--muted); }
+
 /* ---------- welcome and all-set */
 .welcome { min-height: 100vh; background: var(--night); color: #fff; display: flex; align-items: center; justify-content: center; padding: 40px 24px; }
 .welcome-in { width: 560px; max-width: 100%; }
@@ -296,12 +306,14 @@ details.more summary { cursor: pointer; font-weight: 700; color: var(--teal); fo
   .setup-main { padding: 24px 16px; }
   .setup-main h1 { font-size: 30px; }
   .presets { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .extras { grid-template-columns: minmax(0, 1fr); }
   .pin-screen { gap: 36px; }
   .pin-copy h1 { font-size: 34px; }
   .welcome h1 { font-size: 34px; }
 }
 @media (max-width: 560px) {
   .providers, .fields, .presets { grid-template-columns: minmax(0, 1fr); }
+  .seg-wide { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .keypad { grid-template-columns: repeat(3, 76px); gap: 14px; }
   .keypad button { width: 76px; height: 76px; }
   .row .tag { display: none; }

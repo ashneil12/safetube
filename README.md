@@ -36,8 +36,14 @@ rules simply aren't there.
   tier works) suggests every keyword it can think of. You review the list before saving.
 - **You stay in charge.** A parent PIN protects the settings. The "Recently hidden" list
   shows what was hidden and why, with an Allow button for mistakes.
-- **Extras on by default:** Shorts hidden, comments hidden, ads blocked (video ads skipped, ad servers and trackers never load), links to other
-  websites disabled.
+- **Screen time and bedtime.** An optional daily limit and bedtime. When time is up, YouTube
+  is covered by a friendly "that's all for today" screen; the PIN can add 15 more minutes.
+- **Watch history.** A list for the parent of what was watched, with one tap to hide a video
+  or its channel. Kept on the device only, and can be switched off.
+- **Extras, each with a switch:** ads blocked (video ads skipped, ad servers and trackers never
+  load), no autoplay, Shorts hidden, comments hidden, and YouTube's Restricted Mode (set only in
+  SafeTube's own browser, never on the Google account). Links to other websites are always off.
+  All of these are offered during setup and live together under **Time & extras**.
 
 Only YouTube page data (video id, title, channel, the text next to it and the thumbnail URL)
 is ever sent to the AI. SafeTube never sees any other traffic on the device.

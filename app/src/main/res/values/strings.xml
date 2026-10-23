@@ -2,4 +2,8 @@
 <resources>
     <string name="app_name">SafeTube</string>
     <string name="parent_settings">Parent settings</string>
+    <string name="time_up_limit">That\'s all the YouTube for today</string>
+    <string name="time_up_bedtime">It\'s bedtime</string>
+    <string name="time_up_sub">See you next time! Ask a grown-up if you need a few more minutes.</string>
+    <string name="time_up_parent">Grown-ups</string>
 </resources>

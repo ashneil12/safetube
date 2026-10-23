@@ -21,7 +21,7 @@
   if (window.__safetube) return;
 
   var bridge = window.SafeTubeAndroid || null;
-  var cfg = { hideShorts: true, hideComments: true, blockMenu: true, kidsCanBlock: true, blockAds: true, debug: false };
+  var cfg = { hideShorts: true, hideComments: true, blockMenu: true, kidsCanBlock: true, blockAds: true, noAutoplay: true, keepHistory: true, debug: false };
   try { if (bridge) Object.assign(cfg, JSON.parse(bridge.config())); } catch (e) {}
 
   // ---------------------------------------------------------------- ads
@@ -155,6 +155,12 @@
     'ytd-merch-shelf-renderer', 'ytm-merch-shelf-renderer', 'ytd-enforcement-message-view-model'
   ].join(',');
 
+  // The countdown and the wall of suggestions at the end of a video.
+  var AUTOPLAY_SEL = [
+    '.ytp-autonav-endscreen-upnext-container', '.ytp-autonav-endscreen-countdown-overlay', '.ytp-endscreen-content',
+    '.ytm-autonav-bar', 'ytm-autonav-toggle-button-container', '.ytp-autonav-toggle-button-container'
+  ].join(',');
+
   var ID_RE = /^[A-Za-z0-9_-]{11}$/;
   var verdicts = Object.create(null);   // id -> "allow" | "block"
   var retryAt = Object.create(null);    // id -> time we may ask again after "unknown"
@@ -185,6 +191,7 @@
     rules.push(ADS_SEL + '{display:none!important}');
     if (cfg.hideShorts) rules.push(SHORTS_SEL + '{display:none!important}');
     if (cfg.hideComments) rules.push(COMMENTS_SEL + '{display:none!important}');
+    if (cfg.noAutoplay) rules.push(AUTOPLAY_SEL + '{display:none!important}');
     rules.push(
       // SafeTube's few screens copy YouTube's own look so they blend in.
       '#st-overlay{position:fixed;inset:0;z-index:2147483647;display:flex;flex-direction:column;' +
@@ -448,6 +455,8 @@
     if (v === 'allow') {
       if (html.getAttribute('data-st-watch') !== 'allow') html.setAttribute('data-st-watch', 'allow');
       removeOverlay();
+      noteWatched(id);
+      autoplayOff();
       return;
     }
     html.setAttribute('data-st-watch', v === 'block' ? 'block' : 'pending');
@@ -460,6 +469,62 @@
       // The title on the watch page may still belong to the previous video, so let the app look it up.
       need({ id: id, title: '', channel: '', context: '', channelId: '' }, true);
     }
+  }
+
+  // ---------------------------------------------------------------- history and autoplay
+
+  // A video counts as watched after a few seconds on its page; each is reported once.
+  var watchTimer = null;
+  var watchFor = null;
+  var reported = Object.create(null);
+
+  function noteWatched(id) {
+    if (!cfg.keepHistory || reported[id] || watchFor === id) return;
+    clearTimeout(watchTimer);
+    watchFor = id;
+    watchTimer = setTimeout(function () {
+      watchFor = null;
+      if (currentWatchId() !== id || verdicts[id] !== 'allow') return;
+      reported[id] = true;
+      var info = JSON.stringify(currentVideo() || { id: id });
+      if (bridge && bridge.watched) {
+        try { bridge.watched(info); } catch (e) { log('watched failed ' + e); }
+      } else if (window.__safetubeTestWatched) {
+        window.__safetubeTestWatched(JSON.parse(info));
+      }
+    }, WATCHED_AFTER_MS);
+  }
+  var WATCHED_AFTER_MS = cfg.watchedAfterMs || 8000;
+
+  // With autoplay off, moving to another video right after one ends, with no tap from the
+  // child, is YouTube's autoplay: go back to the video that just finished.
+  var lastTouchAt = 0;
+  var endedAt = 0;
+  var endedId = null;
+  ['touchstart', 'mousedown', 'keydown'].forEach(function (ev) {
+    document.addEventListener(ev, function () { lastTouchAt = Date.now(); }, { capture: true, passive: true });
+  });
+  document.addEventListener('ended', function () {
+    endedAt = Date.now();
+    endedId = currentWatchId();
+  }, true);
+
+  function isAutoplayJump() {
+    if (!cfg.noAutoplay || !endedAt) return false;
+    var now = Date.now();
+    var id = currentWatchId();
+    var jump = id && id !== endedId && now - endedAt < 30000 && now - lastTouchAt > 2500;
+    if (jump || now - endedAt >= 30000) endedAt = 0;
+    return jump;
+  }
+
+  // Also switch YouTube's own autoplay toggle off, so it doesn't try in the first place.
+  function autoplayOff() {
+    if (!cfg.noAutoplay) return;
+    var on = document.querySelector(
+      'button.ytm-autonav-toggle-button-container[aria-pressed="true"], .ytp-autonav-toggle-button[aria-checked="true"]'
+    );
+    if (on) try { on.click(); } catch (e) {}
   }
 
   function pauseAll() {
@@ -810,6 +875,11 @@
     var orig = history[fn];
     history[fn] = function () {
       var r = orig.apply(this, arguments);
+      if (isAutoplayJump()) {
+        log('autoplay stopped');
+        setTimeout(function () { history.back(); }, 0);
+        return r;
+      }
       // Hide the player synchronously so nothing plays during the gap before the next scan.
       var id = currentWatchId();
       if (id && verdicts[id] !== 'allow' && document.documentElement) {

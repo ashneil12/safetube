@@ -105,6 +105,84 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("hideComments", true)
         set(v) = sp.edit().putBoolean("hideComments", v).apply()
 
+    /** Stop YouTube moving on to another video by itself when one ends. */
+    var noAutoplay: Boolean
+        get() = sp.getBoolean("noAutoplay", true)
+        set(v) = sp.edit().putBoolean("noAutoplay", v).apply()
+
+    /** YouTube's Restricted Mode, set only in this app's own browser: never on the Google account. */
+    var restrictedMode: Boolean
+        get() = sp.getBoolean("restrictedMode", false)
+        set(v) = sp.edit().putBoolean("restrictedMode", v).apply()
+
+    /** Keep a list of watched videos for the parent. Stays on this device. */
+    var keepHistory: Boolean
+        get() = sp.getBoolean("keepHistory", true)
+        set(v) = sp.edit().putBoolean("keepHistory", v).apply()
+
+    // ---- screen time
+
+    /** Minutes of YouTube a day; 0 means no limit. */
+    var dailyLimitMin: Int
+        get() = sp.getInt("dailyLimitMin", 0)
+        set(v) = sp.edit().putInt("dailyLimitMin", v.coerceIn(0, 24 * 60)).apply()
+
+    var bedtimeOn: Boolean
+        get() = sp.getBoolean("bedtimeOn", false)
+        set(v) = sp.edit().putBoolean("bedtimeOn", v).apply()
+
+    /** "HH:MM", 24-hour. YouTube is off from bedtimeStart until bedtimeEnd. */
+    var bedtimeStart: String
+        get() = sp.getString("bedtimeStart", "19:30") ?: "19:30"
+        set(v) = sp.edit().putString("bedtimeStart", validTime(v, "19:30")).apply()
+
+    var bedtimeEnd: String
+        get() = sp.getString("bedtimeEnd", "07:00") ?: "07:00"
+        set(v) = sp.edit().putString("bedtimeEnd", validTime(v, "07:00")).apply()
+
+    /** Seconds watched today. */
+    val watchedTodaySec: Int get() = if (sp.getInt("watchedDay", 0) == dayKey()) sp.getInt("watchedSec", 0) else 0
+
+    @Synchronized
+    fun addWatched(seconds: Int) {
+        sp.edit().putInt("watchedDay", dayKey()).putInt("watchedSec", watchedTodaySec + seconds).apply()
+    }
+
+    /** Extra minutes a parent granted today on top of the daily limit. */
+    val extraTodayMin: Int get() = if (sp.getInt("extraDay", 0) == dayKey()) sp.getInt("extraMin", 0) else 0
+
+    /** A parent's "a few more minutes": works for both the daily limit and bedtime. */
+    fun addExtraMinutes(minutes: Int) {
+        val now = System.currentTimeMillis()
+        sp.edit().putInt("extraDay", dayKey()).putInt("extraMin", extraTodayMin + minutes)
+            .putLong("bedtimeExtendedUntil", maxOf(now, bedtimeExtendedUntil) + minutes * 60_000L).apply()
+    }
+
+    /** Bedtime is paused until this time (ms) after a parent gives a few more minutes. */
+    var bedtimeExtendedUntil: Long
+        get() = sp.getLong("bedtimeExtendedUntil", 0)
+        set(v) = sp.edit().putLong("bedtimeExtendedUntil", v).apply()
+
+    /** Why YouTube should be closed right now, or null if it's fine to watch. */
+    fun timeUp(now: java.util.Calendar = java.util.Calendar.getInstance()): String? {
+        if (bedtimeOn && now.timeInMillis > bedtimeExtendedUntil && inBedtime(now)) return "bedtime"
+        val limit = dailyLimitMin
+        if (limit > 0 && watchedTodaySec >= (limit + extraTodayMin) * 60) return "limit"
+        return null
+    }
+
+    private fun inBedtime(now: java.util.Calendar): Boolean {
+        val m = now.get(java.util.Calendar.HOUR_OF_DAY) * 60 + now.get(java.util.Calendar.MINUTE)
+        val start = minutes(bedtimeStart)
+        val end = minutes(bedtimeEnd)
+        return if (start <= end) m in start until end else m >= start || m < end
+    }
+
+    private fun minutes(hhmm: String): Int = hhmm.split(":").let { it[0].toInt() * 60 + it[1].toInt() }
+
+    private fun validTime(v: String, fallback: String): String =
+        if (Regex("([01]\\d|2[0-3]):[0-5]\\d").matches(v.trim())) v.trim() else fallback
+
     /** The page the child was on, so a relaunch carries on instead of starting over. */
     val lastUrl: String? get() = sp.getString("lastUrl", null)
     val lastUrlAt: Long get() = sp.getLong("lastUrlAt", 0)
@@ -178,6 +256,8 @@ class Prefs(context: Context) {
         .put("blockMenu", true)
         .put("kidsCanBlock", kidsCanBlock)
         .put("blockAds", blockAds)
+        .put("noAutoplay", noAutoplay)
+        .put("keepHistory", keepHistory)
         .put("debug", BuildConfigFlags.DEBUG)
         .toString()
 

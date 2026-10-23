@@ -29,6 +29,8 @@ class FilterBridge(
     private val onBlockRequest: (BlockRequest) -> Unit,
     /** Called on the main thread when the YouTube logo is held long enough. */
     private val onOpenParent: () -> Unit,
+    /** Called (off the main thread) when the child has been watching a video for a little while. */
+    private val onWatched: (SqliteVerdictStore.Watched) -> Unit,
 ) {
     data class BlockRequest(val channel: Boolean, val video: VideoInfo)
 
@@ -40,6 +42,20 @@ class FilterBridge(
 
     @JavascriptInterface
     fun config(): String = prefs.pageConfigJson()
+
+    @JavascriptInterface
+    fun watched(json: String) {
+        if (!isYouTubeHost(currentHost) || !prefs.keepHistory) return
+        val o = try { JSONObject(json) } catch (e: Exception) { return }
+        val id = o.optString("id")
+        if (!VideoInfo.isValidId(id)) return
+        onWatched(
+            SqliteVerdictStore.Watched(
+                id, o.optString("title").take(300), o.optString("channel").take(120),
+                ChannelBlocklist.normalizeId(o.optString("channelId")) ?: "", System.currentTimeMillis(),
+            )
+        )
+    }
 
     @JavascriptInterface
     fun openParent() {

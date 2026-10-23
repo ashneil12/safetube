@@ -32,6 +32,7 @@
     x: '<path d="M6 6l12 12M18 6L6 18"/>',
     shield: '<path d="M12 3l8 3v6c0 5-3.4 8.6-8 10-4.6-1.4-8-5-8-10V6z"/>',
     eyeoff: '<path d="M3 3l18 18"/><path d="M10.6 5.1A10.7 10.7 0 0 1 12 5c6 0 9.5 7 9.5 7a17.6 17.6 0 0 1-3 3.9M6.6 6.6C3.9 8.4 2.5 12 2.5 12S6 19 12 19c1.9 0 3.6-.7 5-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
+    clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
     user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/>',
   };
   const icon = (name) => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;
@@ -244,7 +245,7 @@
   }
 
   function setupSide(step) {
-    const steps = ['Create a parent PIN', 'Choose what to hide', 'Add a smart checker (optional)'];
+    const steps = ['Create a parent PIN', 'Choose what to hide', 'Time and extras', 'Add a smart checker (optional)'];
     return `
       <div class="setup-side">
         <div class="logo">${LOGO}<span>SafeTube</span></div>
@@ -267,7 +268,7 @@
       <div class="setup">
         ${setupSide(2)}
         <div class="setup-main">
-          <div class="eyebrow">Step 2 of 3</div>
+          <div class="eyebrow">Step 2 of 4</div>
           <h1>What should SafeTube hide?</h1>
           <p class="lead">Tap everything that applies. Each one adds rules and keywords for you.</p>
           <div class="presets">
@@ -305,18 +306,42 @@
       PRESETS.filter((p) => chosen.has(p.id)).forEach((p) => p.words.forEach((w) => words.add(w)));
       S.settings.keywords = [...words];
       save();
-      setupChecker();
+      setupExtras();
     });
     sync();
+  }
+
+  function setupExtras() {
+    app.innerHTML = `
+      <div class="setup">
+        ${setupSide(3)}
+        <div class="setup-main">
+          <div class="eyebrow">Step 3 of 4</div>
+          <h1>Time and extras</h1>
+          <p class="lead">Sensible choices are already set. Change anything you like.</p>
+          <div class="extras">
+            <section class="card">${screenTimeControls()}</section>
+            <section class="card">${extraSwitches()}</section>
+          </div>
+          <div class="setup-actions">
+            <button class="btn btn-ghost" data-back>${icon('back')} Back</button>
+            <button class="btn btn-primary" data-next>Continue ${icon('next')}</button>
+          </div>
+        </div>
+      </div>`;
+    wireSwitches(app, true);
+    wireScreenTime(app, true);
+    app.querySelector('[data-back]').addEventListener('click', setupWhat);
+    app.querySelector('[data-next]').addEventListener('click', () => { save(); setupChecker(); });
   }
 
   function setupChecker() {
     if (S.settings.provider.type === 'NONE') S.settings.provider.type = 'CLEF';
     app.innerHTML = `
       <div class="setup">
-        ${setupSide(3)}
+        ${setupSide(4)}
         <div class="setup-main">
-          <div class="eyebrow">Step 3 of 3 · optional</div>
+          <div class="eyebrow">Step 4 of 4 · optional</div>
           <h1>Add a smart checker</h1>
           <p class="lead">An AI reads each new video’s title and channel and hides the ones that break your rules. Keywords and blocks already work without it.</p>
           <div id="checker-form"></div>
@@ -342,6 +367,7 @@
     ['overview', 'Overview', 'grid'],
     ['rules', 'What to hide', 'filter'],
     ['lists', 'Videos & channels', 'ban'],
+    ['time', 'Time & extras', 'clock'],
     ['checker', 'Smart checker', 'spark'],
     ['settings', 'Settings', 'gear'],
   ];
@@ -364,7 +390,7 @@
     });
     app.querySelector('[data-close]').addEventListener('click', () => B.close());
     const main = app.querySelector('#main');
-    ({ overview, rules, lists, checker, settings })[page](main);
+    ({ overview, rules, lists, time, checker, settings })[page](main);
   }
 
   const PROVIDERS = {
@@ -421,11 +447,17 @@
         <div><h1>Overview</h1><div class="sub">Here’s what SafeTube did today.</div></div>
         <span class="status-pill">Protection is on</span>
       </div>
+      ${L.stats.timeUp ? `
+        <section class="card banner">
+          <div class="card-head"><div><h2>${L.stats.timeUp === 'bedtime' ? 'It’s bedtime on the tablet' : 'Today’s viewing time is used up'}</h2>
+            <p class="note">YouTube is closed for now. Give a little more time if you want.</p></div>
+            <button class="btn btn-sun btn-small" data-more-time>Add 15 minutes</button></div>
+        </section>` : ''}
       <div id="now"></div>
       <div class="stats">
         <div class="stat"><div class="k">Videos checked today</div><div class="v">${L.stats.checkedToday || 0}</div></div>
         <div class="stat"><div class="k">Hidden today</div><div class="v">${L.stats.hiddenToday || 0}</div></div>
-        <div class="stat"><div class="k">Blocked channels</div><div class="v">${L.channels.length}</div></div>
+        <div class="stat"><div class="k">Watched today</div><div class="v">${minutesText(L.stats.watchedMin || 0)}${L.stats.limitMin ? `<small> of ${minutesText(L.stats.limitMin)}</small>` : ''}</div></div>
         <div class="stat"><div class="k">Smart checker</div><div class="v small">${esc(PROVIDERS[p.type].name)}${p.type === 'CLEF' ? ' · free' : ''}</div></div>
       </div>
       <div class="cols">
@@ -453,6 +485,8 @@
       </div>`;
     wireRows(main.querySelector('#recent'));
     wireStrictness(main);
+    const more = main.querySelector('[data-more-time]');
+    if (more) more.addEventListener('click', () => { B.addTime(15); toast('15 more minutes added.'); shell(); });
     main.querySelectorAll('[data-go]').forEach((a) => a.addEventListener('click', (e) => {
       e.preventDefault();
       page = a.dataset.go;
@@ -558,18 +592,16 @@
         </div>
         <div class="side">
           <section class="card">
-            <h2>On YouTube</h2>
-            ${switchRow('hideShorts', 'Hide Shorts', 'Short videos open in the normal player instead.')}
-            ${switchRow('hideComments', 'Hide comments')}
-            ${switchRow('blockAds', 'Block ads', 'Skips video ads and hides ads between videos.')}
-            ${switchRow('kidsCanBlock', 'My child can hide videos and channels', 'They hold a video to hide it. Only you can bring it back.')}
+            <h2>More options</h2>
+            <p class="note">Ads, autoplay, Shorts, comments, Restricted Mode, screen time and bedtime are under Time &amp; extras.</p>
+            <button class="btn btn-ghost btn-small" data-go="time">${icon('clock')} Time &amp; extras</button>
           </section>
         </div>
       </div>`;
     const ta = main.querySelector('#rules');
     ta.addEventListener('change', () => { S.settings.rules = ta.value.trim(); save('Rules saved'); });
     drawChips(main.querySelector('#chips'));
-    wireSwitches(main);
+    main.querySelector('[data-go="time"]').addEventListener('click', () => { page = 'time'; shell(); });
     main.querySelector('[data-suggest]').addEventListener('click', () => suggest(main.querySelector('#suggest'), ta));
   }
 
@@ -643,6 +675,86 @@
     });
   }
 
+  // ------------------------------------------------------------------ time & extras
+
+  const minutesText = (m) => m >= 60 ? `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ''}` : `${m}m`;
+  function whenText(ts) {
+    const d = new Date(ts);
+    const today = new Date();
+    const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    return d.toDateString() === today.toDateString() ? `Today ${time}` : `${d.toLocaleDateString([], { weekday: 'short' })} ${time}`;
+  }
+
+  const LIMITS = [[0, 'Off'], [30, '30m'], [60, '1h'], [90, '1½h'], [120, '2h'], [180, '3h']];
+
+  /** Daily limit and bedtime, used in setup and on the Time & extras page. */
+  function screenTimeControls() {
+    const st = S.settings;
+    return `
+      <div class="field-label">Daily limit</div>
+      <div class="seg seg-wide" role="radiogroup" aria-label="Daily limit">
+        ${LIMITS.map(([v, l]) => `<button role="radio" data-limit="${v}" aria-checked="${st.dailyLimitMin === v}">${l}</button>`).join('')}
+      </div>
+      ${switchRow('bedtimeOn', 'Bedtime', 'YouTube closes between these times.')}
+      <div class="times" data-times ${st.bedtimeOn ? '' : 'hidden'}>
+        <label>From <input class="input" type="time" data-time="bedtimeStart" value="${esc(st.bedtimeStart)}"></label>
+        <label>Until <input class="input" type="time" data-time="bedtimeEnd" value="${esc(st.bedtimeEnd)}"></label>
+      </div>`;
+  }
+  function wireScreenTime(root, quiet) {
+    root.querySelectorAll('[data-limit]').forEach((b) => b.addEventListener('click', () => {
+      S.settings.dailyLimitMin = Number(b.dataset.limit);
+      root.querySelectorAll('[data-limit]').forEach((x) => x.setAttribute('aria-checked', String(x === b)));
+      save(quiet ? '' : 'Saved');
+    }));
+    root.querySelectorAll('[data-time]').forEach((i) => i.addEventListener('change', () => {
+      if (!/^\d\d:\d\d$/.test(i.value)) return;
+      S.settings[i.dataset.time] = i.value;
+      save(quiet ? '' : 'Saved');
+    }));
+  }
+
+  /** Every on/off option, in one place. */
+  function extraSwitches() {
+    return `
+      ${switchRow('blockAds', 'Block ads', 'Skips video ads and hides ads between videos.')}
+      ${switchRow('noAutoplay', 'No autoplay', 'When a video ends, YouTube doesn’t start another one by itself.')}
+      ${switchRow('hideShorts', 'Hide Shorts', 'Short videos open in the normal player instead.')}
+      ${switchRow('hideComments', 'Hide comments')}
+      ${switchRow('restrictedMode', 'YouTube Restricted Mode', 'YouTube’s own filter as an extra safety net. Only on this device, never on your Google account.')}
+      ${switchRow('keepHistory', 'Keep a watch history', 'A list for you of what was watched. Stays on this device.')}
+      ${switchRow('kidsCanBlock', 'My child can hide videos and channels', 'They hold a video to hide it. Only you can bring it back.')}`;
+  }
+
+  function time(main) {
+    const used = L.stats.watchedMin || 0;
+    const limit = L.stats.limitMin || 0;
+    main.innerHTML = `
+      <div class="page-head">
+        <div><h1>Time &amp; extras</h1><div class="sub">Screen time and how YouTube behaves.</div></div>
+      </div>
+      <div class="cols">
+        <div class="grow">
+          <section class="card">
+            <div class="card-head"><div><h2>Screen time</h2>
+              <p class="note">Watched today: <b>${minutesText(used)}</b>${limit ? ` of ${minutesText(limit)}` : ''}.</p></div>
+              ${S.settings.dailyLimitMin || S.settings.bedtimeOn ? '<button class="btn btn-ghost btn-small" data-more-time>Add 15 minutes</button>' : ''}</div>
+            ${screenTimeControls()}
+          </section>
+        </div>
+        <div class="side">
+          <section class="card">
+            <h2>On YouTube</h2>
+            ${extraSwitches()}
+          </section>
+        </div>
+      </div>`;
+    wireSwitches(main);
+    wireScreenTime(main);
+    const more = main.querySelector('[data-more-time]');
+    if (more) more.addEventListener('click', () => { B.addTime(15); toast('15 more minutes added.'); shell(); });
+  }
+
   function switchRow(key, label, sub) {
     return `
       <div class="switch-row">
@@ -650,12 +762,14 @@
         <button class="switch" role="switch" data-switch="${key}" aria-checked="${!!S.settings[key]}" aria-label="${label}"></button>
       </div>`;
   }
-  function wireSwitches(root) {
+  function wireSwitches(root, quiet) {
     root.querySelectorAll('[data-switch]').forEach((b) => b.addEventListener('click', () => {
       const k = b.dataset.switch;
       S.settings[k] = !S.settings[k];
       b.setAttribute('aria-checked', String(S.settings[k]));
-      save('Saved');
+      const times = root.querySelector('[data-times]');
+      if (k === 'bedtimeOn' && times) times.hidden = !S.settings[k];
+      save(quiet ? '' : 'Saved');
     }));
   }
 
@@ -682,6 +796,19 @@
                 : '<div class="empty">Nothing yet. Hold a video on the YouTube screen to hide it.</div>'}
             </div>
           </section>
+          ${S.settings.keepHistory ? `
+          <section class="card" id="history">
+            <div class="card-head"><h2>Watched recently</h2>${L.history && L.history.length ? '<button class="btn btn-ghost btn-small" data-clear-history>Clear</button>' : ''}</div>
+            <div class="rows">
+              ${L.history && L.history.length ? L.history.slice(0, 30).map((v) => `
+                <div class="row">
+                  ${thumb(v.id) ? `<img class="thumb" src="${thumb(v.id)}" alt="">` : '<span class="thumb"></span>'}
+                  <div class="t"><b>${esc(v.title || v.id)}</b><small>${esc(v.channel || '')} · ${esc(whenText(v.ts))}</small></div>
+                  <button class="btn btn-ghost btn-small" data-hist-video="${esc(v.id)}" data-title="${esc(v.title || '')}">Hide</button>
+                  ${v.channelId || v.channel ? `<button class="btn btn-ghost btn-small" data-hist-channel="${esc(v.channelId || '')}" data-name="${esc(v.channel || '')}">Hide channel</button>` : ''}
+                </div>`).join('') : '<div class="empty">Videos your child watches will show up here.</div>'}
+            </div>
+          </section>` : ''}
           <section class="card" data-list>
             <h2>Recently hidden by your rules</h2>
             <div class="rows">
@@ -711,6 +838,19 @@
         </div>
       </div>`;
     main.querySelectorAll('[data-list]').forEach(wireRows);
+    const hist = main.querySelector('#history');
+    if (hist) hist.addEventListener('click', (e) => {
+      const v = e.target.closest('[data-hist-video]');
+      const c = e.target.closest('[data-hist-channel]');
+      const clear = e.target.closest('[data-clear-history]');
+      if (v) { B.blockVideo(v.dataset.histVideo, v.dataset.title); toast('That video is now always hidden.'); }
+      else if (c) {
+        B.blockChannel(JSON.stringify([c.dataset.histChannel, c.dataset.name].filter(Boolean)));
+        toast(`${c.dataset.name || 'That channel'} is now hidden.`);
+      } else if (clear) { B.clearHistory(); toast('History cleared.'); }
+      else return;
+      shell();
+    });
     main.querySelector('[data-paste]').addEventListener('submit', (e) => {
       e.preventDefault();
       const text = e.target.link.value.trim();

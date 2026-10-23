@@ -8,6 +8,8 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
@@ -23,6 +25,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.widget.ProgressBar
+import android.widget.TextView
 import android.widget.Toast
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewCompat
@@ -75,6 +78,7 @@ class MainActivity : Activity() {
         } else if (intent?.action == ACTION_OPEN_PARENT) {
             openParent()
         }
+        applyRestrictedMode()
         if (savedInstanceState == null || webView.restoreState(savedInstanceState) == null) webView.loadUrl(startUrl())
     }
 
@@ -114,7 +118,7 @@ class MainActivity : Activity() {
             WebSettingsCompat.setRequestedWithHeaderOriginAllowList(webView.settings, emptySet())
         }
 
-        bridge = FilterBridge(webView, prefs, DecisionEngine(store, batchSize = 8, aiPool = aiPool), ::showAiError, ::onBlockRequest, ::openParent)
+        bridge = FilterBridge(webView, prefs, DecisionEngine(store, batchSize = 8, aiPool = aiPool), ::showAiError, ::onBlockRequest, ::openParent, store::recordWatched)
         webView.addJavascriptInterface(bridge, "SafeTubeAndroid")
 
         // Best case: the filter is in place before YouTube's own scripts run, so nothing unchecked
@@ -150,13 +154,79 @@ class MainActivity : Activity() {
         if (prefs.version != seenVersion) {
             // Settings changed: the page forgets its decisions and re-checks what's on screen.
             seenVersion = prefs.version
-            webView.evaluateJavascript(
-                "window.__safetube && window.__safetube.reset(${prefs.pageConfigJson()})", null
-            )
+            if (applyRestrictedMode()) {
+                webView.reload()
+            } else {
+                webView.evaluateJavascript(
+                    "window.__safetube && window.__safetube.reset(${prefs.pageConfigJson()})", null
+                )
+            }
+        }
+        lastTick = SystemClock.elapsedRealtime()
+        ticker.removeCallbacks(tick)
+        ticker.post(tick)
+    }
+
+    // ------------------------------------------------------------------ screen time
+
+    private val ticker = Handler(Looper.getMainLooper())
+    private var lastTick = 0L
+    private var timeUpView: View? = null
+
+    /** Counts viewing time while the app is on screen and closes YouTube when time is up. */
+    private val tick = object : Runnable {
+        override fun run() {
+            countTime()
+            showTimeUp(prefs.timeUp())
+            ticker.postDelayed(this, 15_000)
         }
     }
 
+    private fun countTime() {
+        val now = SystemClock.elapsedRealtime()
+        val sec = ((now - lastTick) / 1000).toInt().coerceIn(0, 60)
+        lastTick = now
+        if (sec > 0 && timeUpView == null) prefs.addWatched(sec)
+    }
+
+    private fun showTimeUp(reason: String?) {
+        if (reason == null) {
+            timeUpView?.let { root.removeView(it) }
+            timeUpView = null
+            return
+        }
+        if (timeUpView != null) return
+        webView.evaluateJavascript("document.querySelectorAll('video').forEach(function(v){v.pause()})", null)
+        if (fullscreenView != null) exitFullscreen()
+        val v = layoutInflater.inflate(R.layout.time_up, root, false)
+        v.findViewById<TextView>(R.id.time_up_title).text =
+            getString(if (reason == "bedtime") R.string.time_up_bedtime else R.string.time_up_limit)
+        v.findViewById<View>(R.id.time_up_parent).setOnClickListener { openParent() }
+        root.addView(v, FrameLayout.LayoutParams(MATCH, MATCH))
+        timeUpView = v
+    }
+
+    /**
+     * YouTube's Restricted Mode lives in its PREF cookie (the f2 flag). Setting it here changes only
+     * this app's browser on this device; the Google account and other devices are untouched.
+     * Returns true if the cookie changed and the page needs a reload.
+     */
+    private fun applyRestrictedMode(): Boolean {
+        val cookies = CookieManager.getInstance()
+        val current = cookies.getCookie("https://www.youtube.com")
+            ?.split(";")?.map { it.trim() }?.firstOrNull { it.startsWith("PREF=") }?.removePrefix("PREF=") ?: ""
+        val parts = current.split("&").filter { it.isNotBlank() && !it.startsWith("f2=") }.toMutableList()
+        if (prefs.restrictedMode) parts += "f2=8000000"
+        val wanted = parts.joinToString("&")
+        if (wanted == current) return false
+        cookies.setCookie("https://www.youtube.com", "PREF=$wanted; Domain=.youtube.com; Path=/; Secure; Max-Age=63072000")
+        cookies.flush()
+        return true
+    }
+
     override fun onPause() {
+        countTime()
+        ticker.removeCallbacks(tick)
         webView.url?.let { prefs.rememberPage(it) }
         webView.onPause()
         super.onPause()

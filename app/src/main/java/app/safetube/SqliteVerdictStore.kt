@@ -12,7 +12,7 @@ import app.safetube.core.VideoInfo
 
 /** On-device cache of decisions, so each video is checked by the AI only once per set of rules. */
 class SqliteVerdictStore(context: Context) :
-    SQLiteOpenHelper(context.applicationContext, "verdicts.db", null, 2), VerdictStore {
+    SQLiteOpenHelper(context.applicationContext, "verdicts.db", null, 3), VerdictStore {
 
     data class HiddenVideo(
         val id: String,
@@ -21,6 +21,8 @@ class SqliteVerdictStore(context: Context) :
         val reason: String,
         val score: Double?,
     )
+
+    data class Watched(val id: String, val title: String, val channel: String, val channelId: String, val ts: Long)
 
     /** A video the parent (or, if allowed, the child) hid or allowed by hand. by is "parent" or "child". */
     data class ParentChoice(val id: String, val title: String, val verdict: Verdict, val by: String)
@@ -37,10 +39,45 @@ class SqliteVerdictStore(context: Context) :
         db.execSQL(
             "CREATE TABLE hidden (id TEXT PRIMARY KEY, title TEXT, channel TEXT, reason TEXT, p REAL, ts INTEGER NOT NULL)"
         )
+        createHistory(db)
+    }
+
+    private fun createHistory(db: SQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS history (id TEXT PRIMARY KEY, title TEXT, channel TEXT, channelId TEXT, ts INTEGER NOT NULL)"
+        )
+    }
+
+    /** Remembers a watched video for the parent's list; the newest 300 are kept. */
+    fun recordWatched(v: Watched) {
+        val db = writableDatabase
+        db.insertWithOnConflict(
+            "history", null,
+            ContentValues().apply {
+                put("id", v.id); put("title", v.title); put("channel", v.channel)
+                put("channelId", v.channelId); put("ts", v.ts)
+            },
+            SQLiteDatabase.CONFLICT_REPLACE,
+        )
+        db.execSQL("DELETE FROM history WHERE id NOT IN (SELECT id FROM history ORDER BY ts DESC LIMIT 300)")
+    }
+
+    fun history(limit: Int = 100): List<Watched> =
+        readableDatabase.rawQuery("SELECT id, title, channel, channelId, ts FROM history ORDER BY ts DESC LIMIT $limit", null).use {
+            val out = ArrayList<Watched>()
+            while (it.moveToNext()) {
+                out += Watched(it.getString(0), it.getString(1) ?: "", it.getString(2) ?: "", it.getString(3) ?: "", it.getLong(4))
+            }
+            out
+        }
+
+    fun clearHistory() {
+        writableDatabase.delete("history", null, null)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) db.execSQL("ALTER TABLE overrides ADD COLUMN who TEXT NOT NULL DEFAULT 'parent'")
+        if (oldVersion < 3) createHistory(db)
     }
 
     override fun cachedScore(id: String, configHash: String): Score? =

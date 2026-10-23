@@ -124,7 +124,14 @@ class ParentActivity : Activity() {
                     "stats", JSONObject()
                         .put("checkedToday", prefs.checkedToday())
                         .put("hiddenToday", store.hiddenSince(startOfToday()))
+                        .put("watchedMin", prefs.watchedTodaySec / 60)
+                        .put("limitMin", if (prefs.dailyLimitMin > 0) prefs.dailyLimitMin + prefs.extraTodayMin else 0)
+                        .put("timeUp", prefs.timeUp() ?: JSONObject.NULL)
                 )
+                .put("history", JSONArray(store.history().map { h ->
+                    JSONObject().put("id", h.id).put("title", h.title).put("channel", h.channel)
+                        .put("channelId", h.channelId).put("ts", h.ts)
+                }))
                 .put("hidden", JSONArray(store.recentlyHidden().map { h ->
                     JSONObject().put("id", h.id).put("title", h.title).put("channel", h.channel)
                         .put("reason", if (h.id in byChild) "Set by child" else h.reason)
@@ -177,6 +184,14 @@ class ParentActivity : Activity() {
             prefs.hideComments = o.optBoolean("hideComments", true)
             prefs.kidsCanBlock = o.optBoolean("kidsCanBlock", true)
             prefs.blockAds = o.optBoolean("blockAds", true)
+            prefs.noAutoplay = o.optBoolean("noAutoplay", true)
+            prefs.restrictedMode = o.optBoolean("restrictedMode", false)
+            prefs.keepHistory = o.optBoolean("keepHistory", true)
+            prefs.dailyLimitMin = o.optInt("dailyLimitMin", 0)
+            prefs.bedtimeOn = o.optBoolean("bedtimeOn", false)
+            prefs.bedtimeStart = o.optString("bedtimeStart", "19:30")
+            prefs.bedtimeEnd = o.optString("bedtimeEnd", "07:00")
+            if (!prefs.keepHistory) store.clearHistory()
             prefs.bumpVersion()
         }
 
@@ -222,6 +237,13 @@ class ParentActivity : Activity() {
 
         @JavascriptInterface
         fun unblockChannel(entry: String) = changed { prefs.removeBlockedChannel(entry) }
+
+        /** "A few more minutes" from the parent, for the daily limit or bedtime. */
+        @JavascriptInterface
+        fun addTime(minutes: Int) = changed { prefs.addExtraMinutes(minutes.coerceIn(1, 240)) }
+
+        @JavascriptInterface
+        fun clearHistory() = changed { store.clearHistory() }
 
         @JavascriptInterface
         fun forgetAi() = changed { store.clearDecisions() }
@@ -286,6 +308,13 @@ class ParentActivity : Activity() {
         .put("hideComments", prefs.hideComments)
         .put("kidsCanBlock", prefs.kidsCanBlock)
         .put("blockAds", prefs.blockAds)
+        .put("noAutoplay", prefs.noAutoplay)
+        .put("restrictedMode", prefs.restrictedMode)
+        .put("keepHistory", prefs.keepHistory)
+        .put("dailyLimitMin", prefs.dailyLimitMin)
+        .put("bedtimeOn", prefs.bedtimeOn)
+        .put("bedtimeStart", prefs.bedtimeStart)
+        .put("bedtimeEnd", prefs.bedtimeEnd)
 
     /** The video or channel that was open when the parent came in, if any. */
     private fun currentPage(): Any {

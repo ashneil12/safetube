@@ -26,6 +26,8 @@ function fakeApp(mode) {
     provider: { type: 'NONE', accountId: '', apiKey: '', baseUrl: 'https://openrouter.ai/api/v1', model: '', sendThumbnails: true },
     helper: { type: 'NONE', apiKey: '', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.5-flash' },
     hideShorts: true, hideComments: true, kidsCanBlock: true, blockAds: true,
+    noAutoplay: true, restrictedMode: false, keepHistory: true,
+    dailyLimitMin: 0, bedtimeOn: false, bedtimeStart: '19:30', bedtimeEnd: '07:00',
   };
   window.__log = [];
   window.__pin = mode === 'setup' ? null : '1234';
@@ -40,7 +42,11 @@ function fakeApp(mode) {
         models: { CLEF: 'clef', JEV: 'typesafe/jev-1.14', ANTHROPIC: 'claude-haiku-5-5' } },
     }),
     lists: () => JSON.stringify({
-      stats: { checkedToday: 186, hiddenToday: 14 },
+      stats: { checkedToday: 186, hiddenToday: 14, watchedMin: 72, limitMin: 60, timeUp: 'limit' },
+      history: [
+        { id: 'WHEELSBUS01', title: 'Wheels on the Bus', channel: 'Little Wheels TV', channelId: '/@LittleWheels', ts: Date.now() - 600000 },
+        { id: 'NUMBERS0001', title: 'Counting to 20', channel: 'Number Friends', channelId: '', ts: Date.now() - 86400000 * 2 },
+      ],
       hidden: [
         { id: 'HALLOWEEN01', title: 'Five Little Pumpkins | Halloween Song', channel: 'Sing Along Street', reason: 'Keyword: halloween' },
         { id: 'POTIONSHOP1', title: 'The Little Potion Shop – Episode 4', channel: 'Toon Tales', reason: 'Spells and potions' },
@@ -70,6 +76,8 @@ function fakeApp(mode) {
     blockChannel: (j) => window.__log.push('blockChannel ' + j),
     unblockChannel: (c) => window.__log.push('unblock ' + c),
     forgetAi: () => window.__log.push('forget'),
+    addTime: (m) => window.__log.push('addTime ' + m),
+    clearHistory: () => window.__log.push('clearHistory'),
     openLink: (u) => window.__log.push('open ' + u),
     finishSetup: () => window.__log.push('finishSetup'),
     close: () => window.__log.push('close'),
@@ -140,7 +148,22 @@ function fakeApp(mode) {
   await page.click('[data-next]');
   const saved = await page.evaluate(() => window.__settings);
   check('presets add their keywords', saved.keywords.includes('prank') && saved.keywords.includes('halloween'));
-  check('step 3 offers the smart checker with Clef picked', (await page.getAttribute('[data-type="CLEF"]', 'aria-checked')) === 'true');
+  check('step 3 is time and extras', (await page.textContent('h1')) === 'Time and extras');
+  check('ads and autoplay start switched off for the child',
+    (await page.getAttribute('[data-switch="blockAds"]', 'aria-checked')) === 'true' &&
+    (await page.getAttribute('[data-switch="noAutoplay"]', 'aria-checked')) === 'true');
+  await page.click('[data-limit="60"]');
+  await page.click('[data-switch="bedtimeOn"]');
+  check('bedtime times appear when bedtime is on', await page.isVisible('[data-time="bedtimeStart"]'));
+  await page.fill('[data-time="bedtimeStart"]', '20:00');
+  await page.dispatchEvent('[data-time="bedtimeStart"]', 'change');
+  await page.click('[data-switch="restrictedMode"]');
+  await shot(page, '02b-time-and-extras');
+  const extras = await page.evaluate(() => window.__settings);
+  check('screen time and extras are saved', extras.dailyLimitMin === 60 && extras.bedtimeOn === true &&
+    extras.bedtimeStart === '20:00' && extras.restrictedMode === true);
+  await page.click('[data-next]');
+  check('step 4 offers the smart checker with Clef picked', (await page.getAttribute('[data-type="CLEF"]', 'aria-checked')) === 'true');
   await page.fill('[data-field="accountId"]', 'acct123');
   await page.fill('[data-field="apiKey"]', 'secret');
   await page.dispatchEvent('[data-field="apiKey"]', 'change');
@@ -180,6 +203,19 @@ function fakeApp(mode) {
   check('hiding the open video’s channel sends its handle and name',
     (await log(page)).some((l) => l.includes('blockChannel') && l.includes('@LittleWheels')));
 
+  check('the overview says when time is up, with a way to add more', (await page.textContent('.banner')).includes('used up'));
+  await page.click('[data-more-time]');
+  check('"Add 15 minutes" gives more time', (await log(page)).includes('addTime 15'));
+
+  await page.click('[data-page="time"]');
+  check('time & extras page opens', (await page.textContent('h1')) === 'Time & extras');
+  check('it shows today\'s viewing', (await page.textContent('main')).includes('1h 12m'));
+  await page.click('[data-switch="kidsCanBlock"]');
+  check('switches save', (await page.evaluate(() => window.__settings.kidsCanBlock)) === false);
+  await page.click('[data-limit="90"]');
+  check('the daily limit can be changed', (await page.evaluate(() => window.__settings.dailyLimitMin)) === 90);
+  await shot(page, '06b-time-and-extras');
+
   await page.click('[data-page="rules"]');
   check('what-to-hide page opens', (await page.textContent('h1')) === 'What to hide');
   await page.fill('.chip-input', 'ghost');
@@ -187,8 +223,6 @@ function fakeApp(mode) {
   check('typing a keyword adds it', (await page.evaluate(() => window.__settings.keywords)).includes('ghost'));
   await page.click('[data-suggest]');
   check('without a helper it explains how to set one up', (await page.textContent('#suggest')).includes('isn’t set up'));
-  await page.click('[data-switch="kidsCanBlock"]');
-  check('switches save', (await page.evaluate(() => window.__settings.kidsCanBlock)) === false);
   await shot(page, '06-what-to-hide');
 
   await page.click('[data-page="checker"]');
@@ -218,6 +252,9 @@ function fakeApp(mode) {
   check('pasting a channel hides it', (await log(page)).includes('call blockLink'));
   await page.click('[data-unblock="@PrankZone"]');
   check('channels can be unblocked', (await log(page)).includes('unblock @PrankZone'));
+  check('the watch history is listed', (await page.textContent('#history')).includes('Wheels on the Bus'));
+  await page.click('[data-hist-channel="/@LittleWheels"]');
+  check('a channel from the history can be hidden', (await log(page)).some((l) => l.includes('blockChannel') && l.includes('/@LittleWheels')));
   await page.click('[data-undo="TRUCKS00001"]');
   check('a video the child hid can be brought back', (await log(page)).includes('undo TRUCKS00001'));
   await shot(page, '08-videos-and-channels');

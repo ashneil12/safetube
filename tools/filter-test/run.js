@@ -47,11 +47,13 @@ function check(name, cond) {
   await page.addInitScript(() => {
     window.__submitted = [];
     window.__blocks = [];
+    window.__watched = [];
     window.__safetubeTestBlock = (req) => window.__blocks.push(req);
     window.__parentOpened = 0;
     window.__safetubeTestParent = () => window.__parentOpened++;
     window.SafeTubeAndroid = {
-      config: () => JSON.stringify({ hideShorts: true, hideComments: true }),
+      config: () => JSON.stringify({ hideShorts: true, hideComments: true, watchedAfterMs: 300 }),
+      watched: (json) => window.__watched.push(JSON.parse(json)),
       submit: (json) => window.__submitted.push(...JSON.parse(json)),
     };
   });
@@ -162,6 +164,23 @@ function check(name, cond) {
   await page.waitForTimeout(50);
   check('player shown once the video is allowed', (await vis('#player')) === 'visible');
   check('overlay removed once allowed', (await page.$('#st-overlay')) === null);
+
+  // 8b. Watch history and autoplay.
+  await page.waitForTimeout(500);
+  check('a watched video is reported for the history once',
+    await page.evaluate(() => window.__watched.length === 1 && window.__watched[0].id === 'FRESHVIDEO1'));
+  await page.evaluate(() => window.__safetube.apply({ WHEELSBUS01: 'allow' }));
+  await page.evaluate(() => document.getElementById('vid').dispatchEvent(new Event('ended')));
+  await page.evaluate(() => history.pushState({}, '', '/watch?v=WHEELSBUS01'));
+  await page.waitForTimeout(150);
+  check('autoplay to the next video is undone', page.url().includes('v=FRESHVIDEO1'));
+  await page.evaluate(() => document.getElementById('vid').dispatchEvent(new Event('ended')));
+  await page.evaluate(() => document.dispatchEvent(new Event('mousedown')));
+  await page.evaluate(() => history.pushState({}, '', '/watch?v=WHEELSBUS01'));
+  await page.waitForTimeout(150);
+  check('a video the child picks after one ends still opens', page.url().includes('v=WHEELSBUS01'));
+  await page.evaluate(() => history.pushState({}, '', '/watch?v=FRESHVIDEO1'));
+  await page.waitForTimeout(100);
 
   // 9. Hold menu. Nothing extra shows on the watch page; holding the title opens the menu.
   check('no extra buttons on the watch page', (await page.$('#st-block-btn')) === null);
