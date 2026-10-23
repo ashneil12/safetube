@@ -1,4 +1,5 @@
 import UIKit
+import WebKit
 
 /// A short message at the bottom of the screen, like Android's Toast.
 enum Toast {
@@ -45,8 +46,6 @@ enum Toast {
 }
 
 /// Holds a WKScriptMessageHandler weakly; WKUserContentController keeps a strong reference otherwise.
-import WebKit
-
 final class WeakScriptHandler: NSObject, WKScriptMessageHandler {
     weak var target: WKScriptMessageHandler?
     init(_ target: WKScriptMessageHandler) { self.target = target }

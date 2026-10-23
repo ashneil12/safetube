@@ -7,6 +7,8 @@ import WebKit
 /// The iPhone counterpart of MainActivity.kt and FilterBridge.kt.
 final class MainViewController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
     static let startUrl = URL(string: "https://m.youtube.com/")!
+    /// Reopen the page the child was on if they left less than this long ago.
+    private static let resumeWithinMs: Int64 = 2 * 60 * 60 * 1000
 
     private let prefs = Prefs.shared
     private let store = SqliteVerdictStore.shared
@@ -88,7 +90,25 @@ final class MainViewController: UIViewController, WKNavigationDelegate, WKUIDele
         ])
 
         seenVersion = prefs.version
-        webView.load(URLRequest(url: MainViewController.startUrl))
+        webView.load(URLRequest(url: launchUrl()))
+
+        let nc = NotificationCenter.default
+        nc.addObserver(self, selector: #selector(rememberPage), name: UIApplication.willResignActiveNotification, object: nil)
+        nc.addObserver(self, selector: #selector(rememberPage), name: UIApplication.didEnterBackgroundNotification, object: nil)
+    }
+
+    /// Where the child was, if they left recently; otherwise YouTube's home page.
+    private func launchUrl() -> URL {
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        if now - prefs.lastUrlAt < MainViewController.resumeWithinMs, let s = prefs.lastUrl, let url = URL(string: s),
+           url.scheme == "https", MainViewController.isYouTubeHost(url.host) {
+            return url
+        }
+        return MainViewController.startUrl
+    }
+
+    @objc private func rememberPage() {
+        if let url = webView?.url, MainViewController.isYouTubeHost(url.host) { prefs.rememberPage(url.absoluteString) }
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -254,7 +274,13 @@ final class MainViewController: UIViewController, WKNavigationDelegate, WKUIDele
         cover.isHidden = true
     }
 
-    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { webView.reload() }
+    /// iOS sometimes kills the page's web process (low memory, long in the background). Load the
+    /// same page again behind the cover instead of leaving a blank screen.
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        cover.isHidden = false
+        let current = webView.url.flatMap { MainViewController.isYouTubeHost($0.host) ? $0 : nil }
+        webView.load(URLRequest(url: current ?? launchUrl()))
+    }
 
     /// YouTube, plus the Google pages needed to sign in or accept cookies. Nothing else.
     private func allowNavigation(_ url: URL) -> Bool {

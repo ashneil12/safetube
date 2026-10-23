@@ -127,6 +127,17 @@ final class Prefs {
         version += 1
     }
 
+    // ---- where the child was, so a relaunch carries on instead of starting over
+
+    var lastUrl: String? { sp.string(forKey: "lastUrl") }
+    /// Milliseconds since 1970, like the Android app.
+    var lastUrlAt: Int64 { (sp.object(forKey: "lastUrlAt") as? NSNumber)?.int64Value ?? 0 }
+
+    func rememberPage(_ url: String) {
+        sp.set(url, forKey: "lastUrl")
+        sp.set(NSNumber(value: Int64(Date().timeIntervalSince1970 * 1000)), forKey: "lastUrlAt")
+    }
+
     // ---- PIN
 
     var hasPin: Bool { sp.string(forKey: "pinHash") != nil }
