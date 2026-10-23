@@ -176,6 +176,7 @@ class ParentActivity : Activity() {
             prefs.hideShorts = o.optBoolean("hideShorts", true)
             prefs.hideComments = o.optBoolean("hideComments", true)
             prefs.kidsCanBlock = o.optBoolean("kidsCanBlock", true)
+            prefs.blockAds = o.optBoolean("blockAds", true)
             prefs.bumpVersion()
         }
 
@@ -284,6 +285,7 @@ class ParentActivity : Activity() {
         .put("hideShorts", prefs.hideShorts)
         .put("hideComments", prefs.hideComments)
         .put("kidsCanBlock", prefs.kidsCanBlock)
+        .put("blockAds", prefs.blockAds)
 
     /** The video or channel that was open when the parent came in, if any. */
     private fun currentPage(): Any {

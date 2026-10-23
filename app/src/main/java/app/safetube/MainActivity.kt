@@ -17,6 +17,7 @@ import android.webkit.CookieManager
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -30,6 +31,7 @@ import app.safetube.core.DecisionEngine
 import app.safetube.core.Verdict
 import app.safetube.core.YouTubeOEmbed
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.util.concurrent.Executors
 
 /**
@@ -52,6 +54,8 @@ class MainActivity : Activity() {
     private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
     private var lastErrorToast = 0L
     private var pendingBlock: FilterBridge.BlockRequest? = null
+    /** Read on WebView's network thread, so kept in a field rather than read from prefs each time. */
+    @Volatile private var blockAds = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -64,6 +68,7 @@ class MainActivity : Activity() {
         setContentView(root)
         setUpWebView()
         seenVersion = prefs.version
+        blockAds = prefs.blockAds
 
         if (!prefs.hasPin) {
             startActivity(Intent(this, ParentActivity::class.java).putExtra(ParentActivity.EXTRA_SETUP, true))
@@ -141,6 +146,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         webView.onResume()
+        blockAds = prefs.blockAds
         if (prefs.version != seenVersion) {
             // Settings changed: the page forgets its decisions and re-checks what's on screen.
             seenVersion = prefs.version
@@ -189,6 +195,12 @@ class MainActivity : Activity() {
         @Deprecated("Needed for API < 24")
         override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean =
             !allowNavigation(Uri.parse(url))
+
+        /** Ad and tracking requests get an empty answer, so they never load. */
+        override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+            if (!blockAds || !AdBlocklist.blocks(request.url)) return null
+            return WebResourceResponse("text/plain", "utf-8", 204, "No Content", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+        }
 
         override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
             bridge.currentHost = FilterBridge.hostOf(url)

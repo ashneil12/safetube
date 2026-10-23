@@ -21,8 +21,85 @@
   if (window.__safetube) return;
 
   var bridge = window.SafeTubeAndroid || null;
-  var cfg = { hideShorts: true, hideComments: true, blockMenu: true, kidsCanBlock: true, debug: false };
+  var cfg = { hideShorts: true, hideComments: true, blockMenu: true, kidsCanBlock: true, blockAds: true, debug: false };
   try { if (bridge) Object.assign(cfg, JSON.parse(bridge.config())); } catch (e) {}
+
+  // ---------------------------------------------------------------- ads
+
+  // Video ads come from the player's own data, so they're removed there before the player
+  // reads it: the first page load (ytInitialPlayerResponse), later videos (fetch to the
+  // youtubei API) and anything parsed from text. Ads that still slip through are skipped.
+  var AD_KEYS = ['adPlacements', 'adSlots', 'playerAds', 'adBreakHeartbeatParams'];
+
+  function pruneAds(o) {
+    if (!o || typeof o !== 'object') return o;
+    var found = false;
+    [o, o.playerResponse].forEach(function (t) {
+      if (!t || typeof t !== 'object') return;
+      for (var i = 0; i < AD_KEYS.length; i++) {
+        if (AD_KEYS[i] in t) { delete t[AD_KEYS[i]]; found = true; }
+      }
+    });
+    if (found) log('removed ads from player data');
+    return o;
+  }
+
+  function installAdBlock() {
+    var parse = JSON.parse;
+    JSON.parse = function () {
+      var r = parse.apply(this, arguments);
+      return r && typeof r === 'object' ? pruneAds(r) : r;
+    };
+
+    var initial = pruneAds(window.ytInitialPlayerResponse);
+    try {
+      Object.defineProperty(window, 'ytInitialPlayerResponse', {
+        configurable: true,
+        get: function () { return initial; },
+        set: function (v) { initial = pruneAds(v); }
+      });
+    } catch (e) {}
+
+    var origFetch = window.fetch;
+    if (origFetch) {
+      window.fetch = function (input) {
+        var url = typeof input === 'string' ? input : (input && input.url) || '';
+        var p = origFetch.apply(this, arguments);
+        if (!/\/youtubei\/v1\/(player|next|reel)/.test(url)) return p;
+        return p.then(function (res) {
+          if (!res.ok) return res;
+          return res.clone().text().then(function (text) {
+            var data;
+            try { data = parse(text); } catch (e) { return res; }
+            pruneAds(data);
+            var headers = new Headers(res.headers);
+            headers.delete('content-length');
+            headers.delete('content-encoding');
+            return new Response(JSON.stringify(data), { status: res.status, statusText: res.statusText, headers: headers });
+          }, function () { return res; });
+        });
+      };
+    }
+
+    // Belt and braces: if an ad starts anyway, mute it, run it to the end and press Skip.
+    var mutedForAd = null;
+    setInterval(function () {
+      var player = document.querySelector('.html5-video-player');
+      var video = player && player.querySelector('video');
+      if (!video) return;
+      if (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting')) {
+        if (mutedForAd === null) mutedForAd = video.muted;
+        video.muted = true;
+        if (isFinite(video.duration) && video.duration > 0) video.currentTime = video.duration;
+        var skip = player.querySelector('.ytp-ad-skip-button, .ytp-ad-skip-button-modern, .ytp-skip-ad-button');
+        if (skip) skip.click();
+      } else if (mutedForAd !== null) {
+        video.muted = mutedForAd;
+        mutedForAd = null;
+      }
+    }, 300);
+  }
+  if (cfg.blockAds) installAdBlock();
 
   // One element per video in lists, grids, search results, playlists and "up next".
   var CARD_SELECTORS = [
@@ -72,7 +149,10 @@
     'ytm-promoted-sparkles-web-renderer', 'ytm-promoted-video-renderer', 'ytm-companion-ad-renderer',
     'ytm-ad-slot-renderer', 'ytd-ad-slot-renderer', 'ytd-promoted-sparkles-web-renderer',
     'ytd-in-feed-ad-layout-renderer', 'ytd-banner-promo-renderer', 'ytd-statement-banner-renderer',
-    '#masthead-ad', 'ytm-statement-banner-renderer', 'ad-slot-renderer'
+    '#masthead-ad', 'ytm-statement-banner-renderer', 'ad-slot-renderer',
+    'ytm-promoted-sparkles-text-search-renderer', 'ytd-promoted-sparkles-text-search-renderer',
+    'ytd-player-legacy-desktop-watch-ads-renderer', 'ytm-companion-slot', '.ytp-ad-overlay-container',
+    'ytd-merch-shelf-renderer', 'ytm-merch-shelf-renderer', 'ytd-enforcement-message-view-model'
   ].join(',');
 
   var ID_RE = /^[A-Za-z0-9_-]{11}$/;

@@ -25,7 +25,7 @@ function fakeApp(mode) {
     rules: 'Nothing scary.', keywords: ['halloween', 'witch'], strictness: 'STRICT',
     provider: { type: 'NONE', accountId: '', apiKey: '', baseUrl: 'https://openrouter.ai/api/v1', model: '', sendThumbnails: true },
     helper: { type: 'NONE', apiKey: '', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.5-flash' },
-    hideShorts: true, hideComments: true, kidsCanBlock: true,
+    hideShorts: true, hideComments: true, kidsCanBlock: true, blockAds: true,
   };
   window.__log = [];
   window.__pin = mode === 'setup' ? null : '1234';

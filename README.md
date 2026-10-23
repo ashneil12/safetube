@@ -36,7 +36,7 @@ rules simply aren't there.
   tier works) suggests every keyword it can think of. You review the list before saving.
 - **You stay in charge.** A parent PIN protects the settings. The "Recently hidden" list
   shows what was hidden and why, with an Allow button for mistakes.
-- **Extras on by default:** Shorts hidden, comments hidden, ads hidden, links to other
+- **Extras on by default:** Shorts hidden, comments hidden, ads blocked (video ads skipped, ad servers and trackers never load), links to other
   websites disabled.
 
 Only YouTube page data (video id, title, channel, the text next to it and the thumbnail URL)

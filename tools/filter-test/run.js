@@ -28,6 +28,11 @@ function check(name, cond) {
 
 (async () => {
   const server = http.createServer((req, res) => {
+    if (req.url.startsWith('/youtubei/v1/player')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ videoDetails: { videoId: 'WHEELSBUS01' }, playerAds: [{}], adPlacements: [{}] }));
+      return;
+    }
     res.writeHead(200, { 'content-type': 'text/html' });
     res.end(PAGE);
   }).listen(0);
@@ -210,6 +215,38 @@ function check(name, cond) {
   await page.waitForTimeout(3200);
   check('holding elsewhere does not', (await page.evaluate(() => window.__parentOpened)) === 1);
   await touch('touchend', 400, 600);
+
+  // 9c. Ads: removed from the player's data however it arrives, and skipped if one plays.
+  const ads = await page.evaluate(async () => {
+    window.ytInitialPlayerResponse = { videoDetails: {}, adPlacements: [{}], playerAds: [{}] };
+    const initial = window.ytInitialPlayerResponse;
+    const parsed = JSON.parse('{"playerResponse":{"adSlots":[1],"videoDetails":{}},"other":1}');
+    const fetched = await (await fetch('/youtubei/v1/player?key=x', { method: 'POST' })).json();
+    return {
+      initial: !('adPlacements' in initial) && !('playerAds' in initial) && 'videoDetails' in initial,
+      parsed: !('adSlots' in parsed.playerResponse) && parsed.other === 1,
+      fetched: !('playerAds' in fetched) && !('adPlacements' in fetched) && fetched.videoDetails.videoId === 'WHEELSBUS01',
+      plain: JSON.parse('[1,2]').length === 2,
+    };
+  });
+  check('ads are removed from the first page load', ads.initial);
+  check('ads are removed from parsed player data', ads.parsed);
+  check('ads are removed from player data the page fetches', ads.fetched);
+  check('other data is left alone', ads.plain);
+  await page.evaluate(() => {
+    const p = document.createElement('div');
+    p.className = 'html5-video-player ad-showing';
+    p.innerHTML = '<video id="advid"></video><button class="ytp-ad-skip-button">Skip</button>';
+    p.querySelector('button').onclick = () => { window.__skipped = true; };
+    document.body.prepend(p);
+  });
+  await page.waitForTimeout(400);
+  check('an ad that plays anyway is muted and skipped',
+    await page.evaluate(() => document.getElementById('advid').muted && window.__skipped === true));
+  await page.evaluate(() => document.querySelector('.html5-video-player').classList.remove('ad-showing'));
+  await page.waitForTimeout(400);
+  check('sound comes back after the ad', await page.evaluate(() => !document.getElementById('advid').muted));
+  await page.evaluate(() => document.querySelector('.html5-video-player').remove());
 
   // 10. Settings change: everything is re-checked.
   await page.evaluate(() => history.pushState({}, '', '/'));

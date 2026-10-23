@@ -97,6 +97,10 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("kidsCanBlock", true)
         set(v) = sp.edit().putBoolean("kidsCanBlock", v).apply()
 
+    var blockAds: Boolean
+        get() = sp.getBoolean("blockAds", true)
+        set(v) = sp.edit().putBoolean("blockAds", v).apply()
+
     var hideComments: Boolean
         get() = sp.getBoolean("hideComments", true)
         set(v) = sp.edit().putBoolean("hideComments", v).apply()
@@ -173,6 +177,7 @@ class Prefs(context: Context) {
         .put("hideComments", hideComments)
         .put("blockMenu", true)
         .put("kidsCanBlock", kidsCanBlock)
+        .put("blockAds", blockAds)
         .put("debug", BuildConfigFlags.DEBUG)
         .toString()
 

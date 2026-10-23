@@ -561,6 +561,7 @@
             <h2>On YouTube</h2>
             ${switchRow('hideShorts', 'Hide Shorts', 'Short videos open in the normal player instead.')}
             ${switchRow('hideComments', 'Hide comments')}
+            ${switchRow('blockAds', 'Block ads', 'Skips video ads and hides ads between videos.')}
             ${switchRow('kidsCanBlock', 'My child can hide videos and channels', 'They hold a video to hide it. Only you can bring it back.')}
           </section>
         </div>
