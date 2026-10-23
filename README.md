@@ -2,8 +2,8 @@
 
 Normal YouTube for kids, minus the videos you've said no to.
 
-SafeTube is an open-source Android app (made for Amazon Fire tablets, works on any Android
-tablet or phone) that opens the regular YouTube website and hides every video that matches
+SafeTube is an open-source app for Android (made for Amazon Fire tablets, works on any Android
+tablet or phone) and for iPhone and iPad that opens the regular YouTube website and hides every video that matches
 rules you write in plain English, for example:
 
 > Nothing involving witches, Halloween, ghosts, zombies or anything designed to scare
@@ -62,6 +62,28 @@ is ever sent to the AI. SafeTube never sees any other traffic on the device.
 5. Recommended: in **Settings → Parental Controls** (or Amazon Kids), block the Silk browser
    and the YouTube app so SafeTube is the only way onto YouTube.
 
+## iPhone and iPad
+
+SafeTube isn't on the App Store; you install it on your own iPhone or iPad with your own
+Apple ID. Two ways, both free:
+
+- **From Windows or a Mac, with the ready-made app:** download `SafeTube.ipa` from the
+  **Releases** page ("latest" is rebuilt on every change) and install it with
+  [Sideloadly](https://sideloadly.io) or [AltStore](https://altstore.io) using a free Apple ID.
+  Then, on the phone, turn on **Settings → Privacy & Security → Developer Mode** and trust
+  yourself under **Settings → General → VPN & Device Management**.
+- **Build it on a Mac** with Xcode and a free Apple ID (`brew install xcodegen`, then
+  `cd ios && xcodegen generate`). If you use Claude Code on your Mac, open this repository and
+  say "get this running on my phone": [ios/CLAUDE.md](ios/CLAUDE.md) walks it through every step.
+
+**With a free Apple ID, Apple makes the app stop opening after 7 days** until you re-sign it
+(reinstall from Sideloadly or Xcode, or tap Refresh in AltStore; your settings are kept). A paid
+Apple Developer account ($99 a year) makes an install last a year.
+
+Step-by-step instructions, and how to make SafeTube the only YouTube on the phone with Screen
+Time, are in [ios/README.md](ios/README.md). The iPhone app works just like the Android one:
+same setup, PIN, rules, AI options and hold-to-hide menu.
+
 ## Choosing an AI (optional)
 
 Without an AI, the keyword list and your blocked videos and channels still work, fully
@@ -105,8 +127,8 @@ cd tools/filter-test && npm install && npx playwright install chromium && node r
 node ../parent-test/run.js                   # PIN, setup and parent settings screens
 ```
 
-Every push to `main` builds an APK in GitHub Actions and publishes it as the "latest"
-release; pushing a tag like `v0.1.0` publishes a numbered release as well. To sign every build with the same key, so updates install over the old app and keep its
+Every push to `main` builds an APK and an unsigned iPhone `SafeTube.ipa` in GitHub Actions and
+publishes both as the "latest" release; pushing a tag like `v0.1.0` publishes a numbered release as well. To sign every build with the same key, so updates install over the old app and keep its
 settings, add two repository secrets: `SAFETUBE_KEYSTORE_B64` (base64 of the .jks) and
 `SAFETUBE_KEYSTORE_PASSWORD`. The key alias defaults to `safetube` and the key password to the
 store password; set `SAFETUBE_KEY_ALIAS` and `SAFETUBE_KEY_PASSWORD` to override them. Make a
@@ -129,6 +151,7 @@ debug key, which installs but can't be updated in place.
 | `app/src/main/assets/filter.js` | The script that runs inside YouTube pages: hides unchecked videos, sends them to the app, applies decisions, guards the player. |
 | `app/src/main/assets/parent/` | The PIN pad, first-run setup and parent settings screens (HTML/CSS/JS, shown in the app's own WebView). |
 | `app/src/main/java/app/safetube/` | The Android app: the YouTube WebView, the bridge to the parent screens, SQLite decision cache. |
+| `ios/` | The iPhone and iPad app (Swift, WKWebView) and `ios/SafeTubeCore`, the engine ported to Swift. It uses `filter.js` and `parent/` from `app/src/main/assets` as they are. See [ios/README.md](ios/README.md). |
 | `tools/parent-test/` | Headless-browser tests for the parent screens. |
 | `tools/filter-test/` | Headless-browser tests for `filter.js` against a mock YouTube page. |
 

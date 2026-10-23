@@ -75,11 +75,14 @@ jobs:
       - name: Engine tests (Swift port)
         run: swift test --package-path ios/SafeTubeCore
       - name: Install XcodeGen
+        if: ${{ !cancelled() }}
         run: brew install xcodegen
       - name: Generate Xcode project
+        if: ${{ !cancelled() }}
         working-directory: ios
         run: xcodegen generate
       - name: Build unsigned app
+        if: ${{ !cancelled() }}
         working-directory: ios
         run: |
           xcodebuild -project SafeTube.xcodeproj -scheme SafeTube -configuration Release \

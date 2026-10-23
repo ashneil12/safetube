@@ -95,12 +95,12 @@ public final class DecisionEngine {
         }
 
         // Keep input order; record hidden ones for the parent's review list.
-        let store = self.store
+        let hiddenLog = self.store
         let known = byId
         func send(_ list: [VideoInfo], _ found: [String: Decision]) {
             let out: [Decision] = list.compactMap { v in
                 guard let d = found[v.id] else { return nil }
-                if d.verdict == .block && d.source != .parent { store.recordHidden(known[v.id] ?? v, d) }
+                if d.verdict == .block && d.source != .parent { hiddenLog.recordHidden(known[v.id] ?? v, d) }
                 return d
             }
             if !out.isEmpty { emit(out) }
