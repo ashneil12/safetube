@@ -55,7 +55,7 @@ class FilterBridge(
         if (videos.isEmpty()) return
         val settings = prefs.filterSettings()
         pool.execute {
-            val send = { decisions: List<Decision> ->
+            val send: (List<Decision>) -> Unit = { decisions ->
                 decisions.firstOrNull { it.source == DecisionSource.ERROR }?.let { onAiError(it.reason) }
                 prefs.recordChecked(decisions.count { it.verdict != Verdict.UNKNOWN })
                 val result = JSONObject()
