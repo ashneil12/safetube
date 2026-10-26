@@ -612,10 +612,28 @@ extension OpenRouterAndRequestBudgetTests {
             let settings = FilterSettings(rules: "No violence", provider: provider)
             let oldParts = [settings.effectiveRules(), oldIdentity(provider), oldIdentity(settings.fallbackProvider), String(PromptBuilder.version)]
             let legacyHash = String(Hashing.sha256(oldParts.joined(separator: "\u{0}")).prefix(16))
+            XCTAssertEqual(settings.outageConfigHash(), legacyHash)
             if provider.needsBoundedDecisionState { XCTAssertNotEqual(settings.aiConfigHash(), legacyHash) }
             else { XCTAssertEqual(settings.aiConfigHash(), legacyHash) }
         }
         XCTAssertFalse(ProviderConfig(.openAiCompatible, model: "cloudflare/clef-flash").needsBoundedDecisionState)
         XCTAssertThrowsError(try KeywordSuggester(ProviderConfig(.openRouterDecisions, apiKey: "test")).suggest("No violence"))
+    }
+}
+
+extension OpenRouterAndRequestBudgetTests {
+    func testPersistedOutageIdentityChangesOnlyWithActualAiConfiguration() {
+        let settings = FilterSettings(rules: "No violence", provider: ProviderConfig(.clef, apiKey: "test", accountId: "acc"))
+        XCTAssertNotEqual(settings.aiConfigHash(), settings.outageConfigHash())
+        var changed = settings; changed.rules = "No horror"
+        XCTAssertNotEqual(changed.outageConfigHash(), settings.outageConfigHash())
+        changed = settings; changed.provider.model = "another-model"
+        XCTAssertNotEqual(changed.outageConfigHash(), settings.outageConfigHash())
+        changed = settings; changed.provider.apiKey = "another-key"
+        XCTAssertNotEqual(changed.outageConfigHash(), settings.outageConfigHash())
+        changed = settings; changed.strictness = .balanced
+        XCTAssertEqual(changed.outageConfigHash(), settings.outageConfigHash())
+        changed = settings; changed.blockedKeywords = ["coaster"]
+        XCTAssertEqual(changed.outageConfigHash(), settings.outageConfigHash())
     }
 }

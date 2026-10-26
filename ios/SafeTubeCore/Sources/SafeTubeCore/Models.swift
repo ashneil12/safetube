@@ -150,10 +150,10 @@ public struct ProviderConfig: Equatable {
         type == .clef || (isDecisionModel && modelOrDefault().lowercased().hasPrefix("cloudflare/clef"))
     }
 
-    fileprivate func cacheIdentity() -> String {
+    fileprivate func cacheIdentity(includeRequestFormat: Bool = true) -> String {
         let identity = [type.rawValue, baseUrl.trimmed, modelOrDefault(), accountId.trimmed,
             Hashing.sha256(apiKey), String(usesThumbnails)].joined(separator: "\u{0}")
-        return identity + (needsBoundedDecisionState ? "\u{0}clef-state-v1" : "")
+        return identity + (includeRequestFormat && needsBoundedDecisionState ? "\u{0}clef-state-v1" : "")
     }
 
     public func modelOrDefault() -> String {
@@ -225,8 +225,15 @@ public struct FilterSettings {
     /// Identifies everything that changes what the AI would say about a video.
     /// Cached AI scores are only reused while this stays the same. Strictness is
     /// deliberately left out: scores are cached and the threshold is applied on read.
-    public func aiConfigHash() -> String {
-        let parts = [effectiveRules(), provider.cacheIdentity(), fallbackProvider.cacheIdentity(), String(PromptBuilder.version)]
+    public func aiConfigHash() -> String { configHash(includeRequestFormat: true) }
+
+    /// Outage protection follows actual parent configuration, preserving pre-0.6.1 persisted
+    /// locks when only the request format changes and old score caches need invalidation.
+    public func outageConfigHash() -> String { configHash(includeRequestFormat: false) }
+
+    private func configHash(includeRequestFormat: Bool) -> String {
+        let parts = [effectiveRules(), provider.cacheIdentity(includeRequestFormat: includeRequestFormat),
+            fallbackProvider.cacheIdentity(includeRequestFormat: includeRequestFormat), String(PromptBuilder.version)]
         return String(Hashing.sha256(parts.joined(separator: "\u{0}")).prefix(16))
     }
 }
