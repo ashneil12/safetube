@@ -63,7 +63,7 @@ function fakeApp(mode) {
     call: (name, args, id) => {
       window.__log.push('call ' + name);
       const answers = {
-        lookup: { title: 'Wheels on the Bus', channel: 'Little Wheels TV', channelId: '@LittleWheels' },
+        lookup: { title: 'Wheels on the Bus · Planet Coaster <script>alert(1)</script>', channel: 'Little Wheels TV', channelId: '@LittleWheels', reason: 'Possible scary ride', score: 0.4, threshold: 0.25, source: 'AI', verdict: 'BLOCK' },
         suggest: { keywords: ['trick or treat', 'haunted', 'spell book'] },
         testAi: { results: [{ title: 'Five Little Pumpkins', hidden: true }, { title: 'Counting to 20', hidden: false }] },
         blockLink: { ok: true, message: '@Someone is now hidden.' },
@@ -144,9 +144,18 @@ function fakeApp(mode) {
   await page.click('[data-p="pranks"]');
   check('picking a preset writes the rules for you',
     (await page.inputValue('#own')).includes('No prank videos') && (await page.inputValue('#own')).includes('witches'));
+  await page.selectOption('#contentMode', 'only');
+  await page.click('[data-next]');
+  check('only-show without a description cannot silently finish setup step', (await page.textContent('#content-error')).includes('Describe') && (await page.inputValue('#contentMode')) === 'only');
+  await page.fill('#allowedContent', 'Planet Coaster builds and science');
+  await page.dispatchEvent('#allowedContent', 'change');
+  await page.fill('#exceptions', 'Coaster rides are fine unless there is swearing.');
+  await page.dispatchEvent('#exceptions', 'change');
+  await page.click('[data-strict="PERMISSIVE"]');
   await shot(page, '02-what-to-hide');
   await page.click('[data-next]');
   const saved = await page.evaluate(() => window.__settings);
+  check('onboarding persists only-show, exceptions and chosen strictness', saved.allowedContent === 'Planet Coaster builds and science' && saved.exceptions.includes('Coaster rides') && saved.strictness === 'PERMISSIVE');
   check('presets add their keywords', saved.keywords.includes('prank') && saved.keywords.includes('halloween'));
   check('step 3 is time and extras', (await page.textContent('h1')) === 'Time and extras');
   check('ads and autoplay start switched off for the child',
@@ -164,13 +173,26 @@ function fakeApp(mode) {
     extras.bedtimeStart === '20:00' && extras.restrictedMode === true);
   await page.click('[data-next]');
   check('step 4 offers the smart checker with Clef picked', (await page.getAttribute('[data-type="CLEF"]', 'aria-checked')) === 'true');
+  await page.click('[data-done]');
+  check('only-show requires configured AI before setup finishes', (await page.textContent('#checker-error')).includes('configured smart checker'));
+  await page.click('[data-skip]');
+  check('skipping AI cannot bypass only-show protection', (await page.textContent('h1')) === 'Add a smart checker');
   await page.fill('[data-field="accountId"]', 'acct123');
   await page.fill('[data-field="apiKey"]', 'secret');
   await page.dispatchEvent('[data-field="apiKey"]', 'change');
   await page.dispatchEvent('[data-field="accountId"]', 'change');
+  check('safety pause defaults on in onboarding', (await page.getAttribute('[data-switch="blockOnAiFailure"]', 'aria-checked')) === 'true');
+  await page.click('#backup-form [data-type="OPENAI_COMPATIBLE"]');
+  await page.fill('#backup-form [data-field="apiKey"]', 'backup-key');
+  await page.dispatchEvent('#backup-form [data-field="apiKey"]', 'change');
+  await page.fill('#backup-form [data-field="model"]', 'backup-model');
+  await page.dispatchEvent('#backup-form [data-field="model"]', 'change');
+  await page.click('[data-switch="blockOnAiFailure"]');
   await shot(page, '03-smart-checker-setup');
   await page.click('[data-done]');
   const after = await page.evaluate(() => window.__settings.provider);
+  const setupSettings = await page.evaluate(() => window.__settings);
+  check('onboarding persists backup and safety choices', setupSettings.fallbackProvider.type === 'OPENAI_COMPATIBLE' && setupSettings.fallbackProvider.apiKey === 'backup-key' && setupSettings.fallbackProvider.model === 'backup-model' && setupSettings.blockOnAiFailure === false && setupSettings.allowedContent.includes('Planet Coaster'));
   check('the checker keys are saved', after.type === 'CLEF' && after.accountId === 'acct123' && after.apiKey === 'secret');
   check('the last screen shows how to get back', (await page.textContent('.welcome-lead')).includes('hold the YouTube logo'));
   await page.waitForTimeout(1500);
@@ -194,6 +216,31 @@ function fakeApp(mode) {
   check('the open video can be hidden in one tap', (await page.textContent('.now-playing')).includes('Wheels on the Bus'));
   check('video titles are shown as text, never as HTML',
     (await page.$$('script')).length === 1 && (await page.textContent('#recent')).includes('<script>'));
+  await page.click('[data-details="POTIONSHOP1"] .thumb');
+  await page.waitForTimeout(100);
+  check('video detail popup shows reason, score, threshold and honest metadata gap', (await page.textContent('.video-dialog')).includes('Possible scary ride') && (await page.textContent('.video-dialog')).includes('0.4') && (await page.textContent('.video-dialog')).includes('0.25') && (await page.textContent('.video-dialog')).includes('not available here'));
+  check('popup escapes remote title markup', await page.locator('.video-dialog script').count() === 0);
+  await shot(page, '05b-video-details');
+  await page.click('[data-watch]');
+  check('preview uses protected native link bridge', (await log(page)).includes('open https://www.youtube.com/watch?v=POTIONSHOP1'));
+  await page.click('.video-dialog [data-close]');
+  await page.evaluate(() => {
+    HTMLDialogElement.prototype.showModal = undefined;
+    HTMLDialogElement.prototype.close = undefined;
+    window.SafeTubeParent.call = (name, args, id) => setTimeout(() => window.__parent.done(id, JSON.stringify({ title: '', channel: '', error: 'Offline' })), 1);
+  });
+  await page.click('[data-details="POTIONSHOP1"] .thumb');
+  await page.waitForTimeout(100);
+  check('older WebViews have an accessible popup fallback preserving known metadata offline', await page.isVisible('.legacy-dialog') && (await page.textContent('.video-dialog')).includes('The Little Potion Shop'));
+  await page.click('.video-dialog [data-close]');
+  // Restore fake app async bridge responses for the rest of the walk-through.
+  await page.evaluate(() => {
+    window.SafeTubeParent.call = (name, args, id) => {
+      window.__log.push('call ' + name);
+      const answers = { lookup: { title: 'Wheels on the Bus', channel: 'Little Wheels TV', channelId: '@LittleWheels' }, suggest: { keywords: ['trick or treat', 'haunted', 'spell book'] }, testAi: { results: [{ title: 'Five Little Pumpkins', hidden: true }, { title: 'Counting to 20', hidden: false }] }, blockLink: { ok: true, message: '@Someone is now hidden.' } };
+      setTimeout(() => window.__parent.done(id, JSON.stringify(answers[name])), 30);
+    };
+  });
   check('reasons are labelled', (await page.textContent('#recent')).includes('Keyword “halloween”') &&
     (await page.textContent('#recent')).includes('Hidden by your child'));
   await shot(page, '05-overview');
@@ -217,6 +264,15 @@ function fakeApp(mode) {
   await shot(page, '06b-time-and-extras');
 
   await page.click('[data-page="rules"]');
+  const customBefore = await page.inputValue('#rules');
+  await page.click('[data-add-preset="pranks"]');
+  await page.click('[data-add-preset="pranks"]');
+  check('hub presets add safely without removing or duplicating custom rules', (await page.inputValue('#rules')).startsWith(customBefore) && ((await page.inputValue('#rules')).match(/No prank videos/g) || []).length === 1 && (await page.evaluate(() => window.__settings.keywords)).includes('prank'));
+  await page.fill('#exceptions', 'Planet Coaster is fine if age appropriate.');
+  await page.dispatchEvent('#exceptions', 'change');
+  await page.fill('#allowedContent', 'Planet Coaster and science');
+  await page.dispatchEvent('#allowedContent', 'change');
+  check('hub supports editable only-show and exceptions', (await page.evaluate(() => window.__settings.allowedContent)) === 'Planet Coaster and science' && (await page.evaluate(() => window.__settings.exceptions)).includes('age appropriate'));
   check('what-to-hide page opens', (await page.textContent('h1')) === 'What to hide');
   await page.fill('.chip-input', 'ghost');
   await page.press('.chip-input', 'Enter');
@@ -283,6 +339,30 @@ function fakeApp(mode) {
   await shot(page, '10-small-tablet');
   await page.close();
 
+  page = await open('unlock', { width: 390, height: 844 });
+  await type(page, '1234');
+  await page.click('[data-page="rules"]');
+  check('phone rules including presets do not overflow', await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await shot(page, '11-phone-rules');
+  await page.click('[data-page="overview"]');
+  await page.click('[data-details="POTIONSHOP1"] .thumb');
+  await page.waitForTimeout(100);
+  check('phone detail popup fits the viewport', await page.evaluate(() => document.querySelector('.video-dialog').getBoundingClientRect().width <= innerWidth));
+  await shot(page, '12-phone-video-details');
+  await page.close();
+  page = await open('setup');
+  await page.click('[data-go]');
+  await type(page, '4321'); await page.waitForTimeout(200); await type(page, '4321'); await page.waitForTimeout(200);
+  await page.fill('#allowedContent', 'Science lessons'); await page.dispatchEvent('#allowedContent', 'change');
+  await page.click('[data-next]'); await page.click('[data-next]');
+  await page.click('#checker-form [data-type="OPENAI_COMPATIBLE"]');
+  await page.fill('#checker-form [data-field="baseUrl"]', 'http://localhost:11434/v1');
+  await page.dispatchEvent('#checker-form [data-field="baseUrl"]', 'change');
+  await page.fill('#checker-form [data-field="model"]', 'local-model');
+  await page.dispatchEvent('#checker-form [data-field="model"]', 'change');
+  await page.click('[data-done]');
+  check('onboarding accepts keyless compatible local checkers for Only show', (await page.textContent('.welcome-lead')).includes('hold the YouTube logo') && (await page.evaluate(() => window.__settings.provider.apiKey)) === '');
+  await page.close();
   await browser.close();
   server.close();
   console.log(failures ? `\n${failures} check(s) failed` : '\nAll checks passed');

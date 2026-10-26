@@ -72,7 +72,37 @@
     });
   }
 
+  function ensureSettings() {
+    if (!S.settings) return;
+    if (S.settings.blockOnAiFailure == null) S.settings.blockOnAiFailure = true;
+    if (!S.settings.fallbackProvider) S.settings.fallbackProvider = { ...S.settings.provider, type: 'NONE', apiKey: '', accountId: '', model: '' };
+  }
+
+  function contentControls() {
+    return `<label class="field-label" for="contentMode">Content mode</label>
+      <select id="contentMode" class="input"><option value="hide" ${!S.settings.allowedContent ? 'selected' : ''}>Hide content matching my rules</option><option value="only" ${S.settings.allowedContent ? 'selected' : ''}>Only show content I describe</option></select>
+      <label class="field-label" for="allowedContent">Content to show</label>
+      <p class="note">Describe the content to allow, for example “Planet Coaster builds and educational science”. Everything outside this description is hidden. Requires a working smart checker.</p>
+      <p class="note" id="content-error" role="alert"></p><textarea id="allowedContent" class="textarea" placeholder="Leave blank to check all content against your hide rules">${esc(S.settings.allowedContent || '')}</textarea>
+      <label class="field-label" for="exceptions">Fine-tune the smart checker</label>
+      <p class="note">For example, “Planet Coaster rides are fine unless there is swearing”. This adds context to AI decisions. Keywords and manually hidden videos or channels still take priority.</p>
+      <textarea id="exceptions" class="textarea">${esc(S.settings.exceptions || '')}</textarea>`;
+  }
+  function wireContent(root) {
+    const mode = root.querySelector('#contentMode');
+    mode.addEventListener('change', () => {
+      if (mode.value === 'hide') { root.querySelector('#allowedContent').value = ''; S.settings.allowedContent = ''; save('Content mode saved'); }
+      else { root.querySelector('#content-error').textContent = 'Enter a description to activate Only show.'; root.querySelector('#allowedContent').focus(); }
+    });
+    root.querySelector('#allowedContent').addEventListener('input', (e) => { if (e.target.value.trim()) { mode.value = 'only'; root.querySelector('#content-error').textContent = ''; } });
+    ['allowedContent', 'exceptions'].forEach((key) => root.querySelector('#' + key).addEventListener('change', (e) => {
+      S.settings[key] = e.target.value.trim(); save('Rules saved');
+    }));
+  }
+
   function save(message) {
+    const setupError = document.getElementById('checker-error');
+    if (setupError) setupError.textContent = '';
     B.save(JSON.stringify(S.settings));
     if (message) toast(message);
   }
@@ -245,7 +275,7 @@
   }
 
   function setupSide(step) {
-    const steps = ['Create a parent PIN', 'Choose what to hide', 'Time and extras', 'Add a smart checker (optional)'];
+    const steps = ['Create a parent PIN', 'Choose what to hide', 'Time and extras', S.settings.allowedContent ? 'Add a smart checker (required)' : 'Add a smart checker (optional)'];
     return `
       <div class="setup-side">
         <div class="logo">${LOGO}<span>SafeTube</span></div>
@@ -262,6 +292,7 @@
   }
 
   function setupWhat() {
+    ensureSettings();
     const chosen = new Set(['scary']);
     let edited = false;
     app.innerHTML = `
@@ -279,12 +310,16 @@
           </div>
           <label class="field-label" for="own">Or say it in your own words</label>
           <textarea id="own" class="textarea"></textarea>
+          ${contentControls()}
+          <h2>How strict</h2>${strictnessControl()}
           <div class="setup-actions">
             <span></span>
             <button class="btn btn-primary" data-next>Continue ${icon('next')}</button>
           </div>
         </div>
       </div>`;
+    wireContent(app);
+    wireStrictness(app);
     const own = app.querySelector('#own');
     const sync = () => {
       app.querySelectorAll('.preset').forEach((b) => b.setAttribute('aria-pressed', String(chosen.has(b.dataset.p))));
@@ -301,6 +336,10 @@
     });
     own.addEventListener('input', () => { edited = true; });
     app.querySelector('[data-next]').addEventListener('click', () => {
+      if (app.querySelector('#contentMode').value === 'only' && !app.querySelector('#allowedContent').value.trim()) {
+        app.querySelector('#content-error').textContent = 'Describe the content to show before continuing.';
+        app.querySelector('#allowedContent').focus(); return;
+      }
       S.settings.rules = own.value.trim();
       const words = new Set();
       PRESETS.filter((p) => chosen.has(p.id)).forEach((p) => p.words.forEach((w) => words.add(w)));
@@ -341,18 +380,26 @@
       <div class="setup">
         ${setupSide(4)}
         <div class="setup-main">
-          <div class="eyebrow">Step 4 of 4 · optional</div>
+          <div class="eyebrow">Step 4 of 4 · ${S.settings.allowedContent ? 'required for Only show' : 'optional'}</div>
           <h1>Add a smart checker</h1>
           <p class="lead">An AI reads each new video’s title and channel and hides the ones that break your rules. Keywords and blocks already work without it.</p>
-          <div id="checker-form"></div>
+          <p class="note" id="checker-error" role="alert"></p><div id="checker-form"></div>
           <div class="setup-actions">
             <button class="btn btn-ghost" data-skip>Skip for now</button>
             <button class="btn btn-primary" data-done>Finish ${icon('next')}</button>
           </div>
         </div>
       </div>`;
+    app.querySelector('#checker-form').insertAdjacentHTML('afterend', '<section class="card"><h2>Backup &amp; safety</h2><div id="backup-form"></div><div id="safety-control"></div></section>');
     checkerForm(app.querySelector('#checker-form'), { compact: true });
+    backupControls(app);
     const finish = (keepChecker) => {
+      const configured = (p) => p && (p.type === 'OPENAI_COMPATIBLE' ? !!(p.model && p.baseUrl) : p.type === 'CLEF' ? !!(p.apiKey && p.accountId) : ['JEV', 'ANTHROPIC'].includes(p.type) && !!p.apiKey);
+      if (S.settings.allowedContent && !((keepChecker && configured(S.settings.provider)) || configured(S.settings.fallbackProvider))) {
+        app.querySelector('#checker-error').textContent = 'Only show needs a configured smart checker. Enter the primary or backup credentials before finishing.';
+        const input = app.querySelector('#checker-form [data-field="apiKey"]');
+        if (input) input.focus(); return;
+      }
       if (!keepChecker) S.settings.provider.type = 'NONE';
       save();
       allSet();
@@ -373,6 +420,7 @@
   ];
 
   function shell() {
+    ensureSettings();
     reloadLists();
     app.innerHTML = `
       <div class="shell">
@@ -416,16 +464,58 @@
     const src = thumb(v.id);
     return `
       <div class="row">
-        ${src ? `<img class="thumb" src="${src}" alt="">` : '<span class="thumb"></span>'}
-        <div class="t"><b>${esc(v.title || v.id)}</b><small>${esc(v.channel || '')}</small></div>
+        <button class="video-preview" data-details="${esc(v.id)}" aria-label="View details for ${esc(v.title || v.id)}">${src ? `<img class="thumb" src="${src}" alt="">` : '<span class="thumb"></span>'}</button>
+        <button class="t video-preview" data-details="${esc(v.id)}"><b>${esc(v.title || v.id)}</b><small>${esc(v.channel || '')}</small></button>
         ${extraTag || ''}
         <button class="btn btn-ghost btn-small" data-${action}="${esc(v.id)}" data-title="${esc(v.title || '')}">${label}</button>
       </div>`;
   }
 
+  async function videoDetails(id) {
+    const known = [...(L.hidden || []), ...(L.history || []), ...(L.blocked || []), ...(L.allowed || [])].find((v) => v.id === id) || { id };
+    const dialog = document.createElement('dialog');
+    dialog.className = 'video-dialog';
+    dialog.innerHTML = '<p>Loading video details…</p><button class="btn" data-close>Close</button>';
+    dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true'); dialog.setAttribute('aria-label', 'Video details');
+    const priorFocus = document.activeElement;
+    const restore = () => { app.style.pointerEvents = ''; app.removeAttribute('aria-hidden'); if (priorFocus && priorFocus.isConnected) priorFocus.focus(); };
+    app.style.pointerEvents = 'none'; app.setAttribute('aria-hidden', 'true');
+    const close = () => { if (typeof dialog.close === 'function') dialog.close(); else dialog.remove(); restore(); };
+    document.body.appendChild(dialog);
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+    else { dialog.setAttribute('open', ''); dialog.classList.add('legacy-dialog'); }
+    dialog.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { close(); return; }
+      if (e.key !== 'Tab') return;
+      const buttons = dialog.querySelectorAll('button'); const first = buttons[0]; const last = buttons[buttons.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    });
+    dialog.querySelector('[data-close]').focus();
+    dialog.addEventListener('close', () => { dialog.remove(); restore(); });
+    dialog.querySelector('[data-close]').onclick = () => close();
+    const result = await call('lookup', { id });
+    if (!dialog.isConnected) return;
+    const v = { ...known, ...result, title: result.title || known.title, channel: result.channel || known.channel };
+    dialog.innerHTML = `<div class="card-head"><h2>Video details</h2><button class="btn btn-ghost" data-close>Close</button></div>
+      <img class="detail-thumb" src="${thumb(id)}" alt=""><h3>${esc(v.title || id)}</h3><p>${esc(v.channel || 'Channel unavailable')}</p>
+      <h3>Why this decision?</h3><p class="detail-copy">${esc(v.reason || 'No stored explanation is available for this video.')}</p>
+      <p class="note">${v.source ? 'Source: ' + esc(v.source) + '. ' : ''}${v.verdict ? 'Decision: ' + esc(v.verdict) + '. ' : ''}${typeof v.score === 'number' ? 'Rule-match score: ' + esc(v.score) + '. ' : ''}${typeof v.threshold === 'number' ? 'Hide threshold: ' + esc(v.threshold) + '.' : ''}</p>
+      <p class="note">The score estimates whether this video matches your hide rules. A lower hide threshold is stricter. This is a metadata assessment, not a review of everything spoken or shown.</p><h3>Available description</h3><p class="detail-copy">${esc(v.description || 'The full video description is not available here. Open the video to review it before changing your rules.')}</p>
+      ${v.error ? `<p class="note">${esc(v.error)}</p>` : ''}
+      <div class="dialog-actions"><button class="btn btn-primary" data-watch>View on YouTube</button><button class="btn btn-ghost" data-allow-detail>Allow video</button><button class="btn btn-ghost" data-edit>Edit rules</button></div>`;
+    dialog.querySelector('[data-close]').onclick = () => close();
+    dialog.querySelector('[data-close]').focus();
+    dialog.querySelector('[data-watch]').onclick = () => B.openLink('https://www.youtube.com/watch?v=' + encodeURIComponent(id));
+    dialog.querySelector('[data-allow-detail]').onclick = () => { B.allow(id, v.title || id); close(); toast('Allowed.'); shell(); };
+    dialog.querySelector('[data-edit]').onclick = () => { close(); page = 'rules'; shell(); };
+  }
+
   // Allow / Undo / Unblock buttons inside any list.
   function wireRows(root) {
     root.addEventListener('click', (e) => {
+      const details = e.target.closest('[data-details]');
+      if (details) { videoDetails(details.dataset.details); return; }
       const allow = e.target.closest('[data-allow]');
       const undo = e.target.closest('[data-undo]');
       const unblock = e.target.closest('[data-unblock]');
@@ -569,6 +659,7 @@
   }
 
   function rules(main) {
+    ensureSettings();
     main.innerHTML = `
       <div class="page-head">
         <div><h1>What to hide</h1><div class="sub">Changes apply straight away, even to videos already on screen.</div></div>
@@ -579,6 +670,7 @@
             <label for="rules"><h2>In your own words</h2></label>
             <p class="note">The smart checker reads every video against this.</p>
             <textarea id="rules" class="textarea">${esc(S.settings.rules)}</textarea>
+            ${contentControls()}
           </section>
           <section class="card">
             <div class="card-head">
@@ -591,6 +683,9 @@
           </section>
         </div>
         <div class="side">
+          <section class="card"><h2>Ready-made hide rules</h2><p class="note">Add a preset at any time. Your existing rules and keywords stay in place.</p>
+            <div class="presets">${PRESETS.map((p) => `<button class="preset" data-add-preset="${p.id}"><b>${esc(p.name)}</b><span>${esc(p.desc)}</span></button>`).join('')}</div>
+          </section>
           <section class="card">
             <h2>More options</h2>
             <p class="note">Ads, autoplay, Shorts, comments, Restricted Mode, screen time and bedtime are under Time &amp; extras.</p>
@@ -598,6 +693,13 @@
           </section>
         </div>
       </div>`;
+    wireContent(main);
+    main.querySelectorAll('[data-add-preset]').forEach((b) => b.addEventListener('click', () => {
+      const p = PRESETS.find((p) => p.id === b.dataset.addPreset);
+      if (!S.settings.rules.includes(p.rule)) S.settings.rules = [S.settings.rules, p.rule].filter(Boolean).join(' ');
+      S.settings.keywords = [...new Set([...S.settings.keywords, ...p.words])];
+      save('Preset added'); rules(main);
+    }));
     const ta = main.querySelector('#rules');
     ta.addEventListener('change', () => { S.settings.rules = ta.value.trim(); save('Rules saved'); });
     drawChips(main.querySelector('#chips'));
@@ -804,7 +906,7 @@
                 <div class="row">
                   ${thumb(v.id) ? `<img class="thumb" src="${thumb(v.id)}" alt="">` : '<span class="thumb"></span>'}
                   <div class="t"><b>${esc(v.title || v.id)}</b><small>${esc(v.channel || '')} · ${esc(whenText(v.ts))}</small></div>
-                  <button class="btn btn-ghost btn-small" data-hist-video="${esc(v.id)}" data-title="${esc(v.title || '')}">Hide</button>
+                  <button class="btn btn-ghost btn-small" data-details="${esc(v.id)}">Details</button><button class="btn btn-ghost btn-small" data-hist-video="${esc(v.id)}" data-title="${esc(v.title || '')}">Hide</button>
                   ${v.channelId || v.channel ? `<button class="btn btn-ghost btn-small" data-hist-channel="${esc(v.channelId || '')}" data-name="${esc(v.channel || '')}">Hide channel</button>` : ''}
                 </div>`).join('') : '<div class="empty">Videos your child watches will show up here.</div>'}
             </div>
@@ -840,6 +942,8 @@
     main.querySelectorAll('[data-list]').forEach(wireRows);
     const hist = main.querySelector('#history');
     if (hist) hist.addEventListener('click', (e) => {
+      const details = e.target.closest('[data-details]');
+      if (details) { videoDetails(details.dataset.details); return; }
       const v = e.target.closest('[data-hist-video]');
       const c = e.target.closest('[data-hist-channel]');
       const clear = e.target.closest('[data-clear-history]');
@@ -863,18 +967,19 @@
   }
 
   // The provider picker and its fields; used on the checker page and in setup.
-  function checkerForm(box, { compact } = {}) {
-    const p = S.settings.provider;
+  function checkerForm(box, { compact, fallback = false } = {}) {
+    ensureSettings();
+    const p = fallback ? S.settings.fallbackProvider : S.settings.provider;
     const types = compact ? ['CLEF', 'JEV', 'ANTHROPIC', 'OPENAI_COMPATIBLE'] : ['CLEF', 'JEV', 'ANTHROPIC', 'OPENAI_COMPATIBLE', 'NONE'];
     const info = PROVIDERS[p.type];
     const modelHint = S.defaults.models[p.type] || 'e.g. gpt-4o-mini';
     const chat = p.type === 'ANTHROPIC' || p.type === 'OPENAI_COMPATIBLE';
     box.innerHTML = `
-      <div class="providers" role="radiogroup" aria-label="Video checker">
+      <div class="providers" role="radiogroup" aria-label="${fallback ? 'Backup checker' : 'Video checker'}">
         ${types.map((t) => `
           <button class="provider" role="radio" data-type="${t}" aria-checked="${p.type === t}">
             <b>${PROVIDERS[t].name}${PROVIDERS[t].badge ? ` <span class="badge">${PROVIDERS[t].badge}</span>` : ''}</b>
-            <span>${PROVIDERS[t].desc}</span>
+            <span>${fallback && t === 'NONE' ? 'No backup checker' : PROVIDERS[t].desc}</span>
           </button>`).join('')}
       </div>
       ${p.type === 'NONE' ? '' : `
@@ -893,17 +998,18 @@
           ${chat ? `<label class="check-row wide"><input type="checkbox" data-thumbs ${p.sendThumbnails ? 'checked' : ''}> Also look at thumbnails (catches more, costs a little more)</label>` : ''}
         </div>
       </details>`}
+      ${fallback ? '<p class="note">Tried automatically when the primary checker fails.</p>' : `
       <div class="test-box">
         <button class="btn btn-dark btn-small" data-test>Test it</button>
         <div class="test-out" data-out><span class="muted">Checks a Halloween song and a counting song against your rules.</span></div>
-      </div>`}`;
+      </div>`}`}`;
     box.querySelectorAll('[data-type]').forEach((b) => b.addEventListener('click', () => {
       if (p.type !== b.dataset.type) {
         p.type = b.dataset.type;
         p.model = ''; // a model name for one provider means nothing to another
         save();
       }
-      checkerForm(box, { compact });
+      checkerForm(box, { compact, fallback });
     }));
     box.querySelectorAll('[data-field]').forEach((input) => input.addEventListener('change', () => {
       p[input.dataset.field] = input.value.trim();
@@ -934,22 +1040,30 @@
       placeholder="${esc(placeholder || '')}" autocomplete="off" autocapitalize="off" spellcheck="false"></label>`;
   }
 
+  function backupControls(root) {
+    ensureSettings();
+    checkerForm(root.querySelector('#backup-form'), { fallback: true });
+    root.querySelector('#safety-control').innerHTML = switchRow('blockOnAiFailure', 'Pause YouTube if checks run out', 'Recommended. If both checkers fail, all of YouTube is locked, including previously allowed videos, until a successful retry or a parent changes settings. If off, unchecked videos still stay hidden.');
+    wireSwitches(root.querySelector('#safety-control'));
+  }
+
   function checker(main) {
     main.innerHTML = `
       <div class="page-head">
         <div><h1>Smart checker</h1><div class="sub">An AI reads each video’s title and channel against your rules. Optional: keywords and blocks work without it.</div></div>
       </div>
       <div class="cols">
-        <section class="card grow"><h2>Video checker</h2><div id="form"></div></section>
+        <div class="grow"><section class="card"><h2>Video checker</h2><div id="form"></div></section><section class="card"><h2>Backup checker</h2><p class="note">Uses a separate provider or model if the first checker fails or runs out.</p><div id="backup-form"></div><div id="safety-control"></div></section></div>
         <div class="side">
           <section class="card" id="helper"></section>
           <section class="card dark" style="display: flex; gap: 14px">
             <span style="color: var(--sun)">${icon('shield')}</span>
-            <p class="note" style="margin: 0">Your keys stay on this tablet. Only video titles and channel names are sent, and each video is checked once.</p>
+            <p class="note" style="margin: 0">Your keys stay on this tablet. The checker receives video titles, channel names, available page text and thumbnails when enabled. Saved checks are reused while your rules stay the same.</p>
           </section>
         </div>
       </div>`;
     checkerForm(main.querySelector('#form'));
+    backupControls(main);
     helperCard(main.querySelector('#helper'), false);
   }
 

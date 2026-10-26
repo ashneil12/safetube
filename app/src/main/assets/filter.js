@@ -162,6 +162,7 @@
   ].join(',');
 
   var ID_RE = /^[A-Za-z0-9_-]{11}$/;
+  var aiUnavailable = !!cfg.aiUnavailable;
   var verdicts = Object.create(null);   // id -> "allow" | "block"
   var retryAt = Object.create(null);    // id -> time we may ask again after "unknown"
   var queued = Object.create(null);     // id -> video waiting to be sent
@@ -188,6 +189,8 @@
     PLAYER_SEL.split(',').forEach(function (s) {
       rules.push('html:not([data-st-watch="allow"]) ' + s + '{visibility:hidden!important}');
     });
+    rules.push('html[data-st-ai-unavailable] body,html[data-st-ai-unavailable] body *{visibility:hidden!important;pointer-events:none!important}' +
+      'html[data-st-ai-unavailable] #st-overlay,html[data-st-ai-unavailable] #st-overlay *{visibility:visible!important;pointer-events:auto!important}');
     rules.push(ADS_SEL + '{display:none!important}');
     if (cfg.hideShorts) rules.push(SHORTS_SEL + '{display:none!important}');
     if (cfg.hideComments) rules.push(COMMENTS_SEL + '{display:none!important}');
@@ -300,7 +303,7 @@
 
   function need(video, priority) {
     var id = video.id;
-    if (verdicts[id]) return;
+    if (verdicts[id] && !aiUnavailable) return;
     var now = Date.now();
     if (inFlight[id] && now - inFlight[id] < INFLIGHT_TIMEOUT_MS) return;
     if (retryAt[id] && now < retryAt[id]) return;
@@ -346,6 +349,7 @@
     scanScheduled = false;
     if (!document.documentElement) return;
     installStyle();
+    if (aiUnavailable) { lockPage(); }
     if (full !== false) full = true;
 
     var roots = full || !dirty ? [document] : dirty;
@@ -439,6 +443,12 @@
 
   function checkWatchPage() {
     var html = document.documentElement;
+    if (aiUnavailable) {
+      lockPage();
+      var retryId = currentWatchId();
+      if (retryId) need({ id: retryId, title: '', channel: '', context: '', channelId: '' }, true);
+      return;
+    }
     if (cfg.hideShorts && location.pathname.indexOf('/shorts') === 0) {
       var sid = currentWatchId();
       // Shorts are hidden in this mode; open the same video in the normal player instead.
@@ -528,7 +538,7 @@
   }
 
   function pauseAll() {
-    var vids = document.querySelectorAll('video');
+    var vids = document.querySelectorAll('video,audio');
     for (var i = 0; i < vids.length; i++) {
       try { vids[i].pause(); vids[i].muted = true; } catch (e) {}
     }
@@ -537,7 +547,7 @@
   // Catch playback that starts before (or between) scans.
   document.addEventListener('play', function (e) {
     var html = document.documentElement;
-    if (html && html.getAttribute('data-st-watch') !== 'allow' && e.target && e.target.pause) {
+    if ((aiUnavailable || (html && html.getAttribute('data-st-watch') !== 'allow')) && e.target && e.target.pause) {
       e.target.pause();
     }
   }, true);
@@ -822,6 +832,47 @@
 
   // ---------------------------------------------------------------- API used by the app
 
+  function lockPage() {
+    if (!document.documentElement) return;
+    document.documentElement.setAttribute('data-st-ai-unavailable', 'true');
+    document.documentElement.setAttribute('data-st-watch', 'pending');
+    pauseAll();
+    var existing = document.getElementById('st-overlay');
+    if (existing && overlayFor === 'ai-unavailable') return;
+    removeOverlay();
+    var box = el('div'); box.id = 'st-overlay';
+    box.setAttribute('role', 'alertdialog'); box.setAttribute('aria-label', 'SafeTube checks unavailable');
+    box.appendChild(el('div', 'st-h', 'YouTube is paused'));
+    box.appendChild(el('div', 'st-p', 'SafeTube cannot check videos right now. A parent can review the checkers, or retry when checks are available.'));
+    var parent = el('button', '', 'Parent settings');
+    parent.addEventListener('click', function () {
+      if (bridge && bridge.openParent) bridge.openParent();
+      else if (window.__safetubeTestParent) window.__safetubeTestParent();
+    });
+    var retry = el('button', '', 'Retry checks');
+    retry.addEventListener('click', function () { location.reload(); });
+    box.appendChild(parent); box.appendChild(retry);
+    (document.body || document.documentElement).appendChild(box);
+    overlayFor = 'ai-unavailable';
+  }
+
+  function setAiUnavailable(value) {
+    aiUnavailable = !!value;
+    if (aiUnavailable) lockPage();
+    else {
+      document.documentElement.removeAttribute('data-st-ai-unavailable');
+      removeOverlay(); scan();
+    }
+  }
+  // Block clicks and key activation behind the safety wall, including synthetic navigation controls.
+  ['click', 'keydown', 'pointerdown', 'touchstart'].forEach(function (type) {
+    document.addEventListener(type, function (e) {
+      if (aiUnavailable && !(e.target.closest && e.target.closest('#st-overlay'))) {
+        e.preventDefault(); e.stopImmediatePropagation();
+      }
+    }, true);
+  });
+
   function apply(result) {
     if (typeof result === 'string') result = JSON.parse(result);
     var now = Date.now();
@@ -849,6 +900,7 @@
     queued = Object.create(null);
     if (newCfg) {
       cfg = Object.assign(cfg, typeof newCfg === 'string' ? JSON.parse(newCfg) : newCfg);
+      if (cfg.aiUnavailable) aiUnavailable = true;
       var old = document.getElementById('st-style');
       if (old) old.remove();
     }
@@ -861,7 +913,7 @@
     if (cfg.debug) try { console.log('[safetube] ' + msg); } catch (e) {}
   }
 
-  window.__safetube = { apply: apply, reset: reset, scan: scan, idFromUrl: idFromUrl, _verdicts: function () { return verdicts; } };
+  window.__safetube = { setAiUnavailable: setAiUnavailable, apply: apply, reset: reset, scan: scan, idFromUrl: idFromUrl, _verdicts: function () { return verdicts; } };
 
   // ---------------------------------------------------------------- start
 
