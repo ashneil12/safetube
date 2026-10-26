@@ -25,9 +25,9 @@ class PromptAndProvidersTest {
     }
 
     @Test
-    fun `clamps out-of-range probabilities`() {
+    fun `rejects out-of-range probabilities so fallback can retry`() {
         val s = PromptBuilder.parseScores("""{"results":[{"id":"aaaaaaaaaaa","p":7}]}""", listOf("aaaaaaaaaaa"))
-        assertEquals(1.0, s.single().p)
+        assertTrue(s.isEmpty())
     }
 
     @Test

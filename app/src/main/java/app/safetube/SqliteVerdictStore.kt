@@ -12,7 +12,7 @@ import app.safetube.core.VideoInfo
 
 /** On-device cache of decisions, so each video is checked by the AI only once per set of rules. */
 class SqliteVerdictStore(context: Context) :
-    SQLiteOpenHelper(context.applicationContext, "verdicts.db", null, 3), VerdictStore {
+    SQLiteOpenHelper(context.applicationContext, "verdicts.db", null, 4), VerdictStore {
 
     data class HiddenVideo(
         val id: String,
@@ -20,6 +20,7 @@ class SqliteVerdictStore(context: Context) :
         val channel: String,
         val reason: String,
         val score: Double?,
+        val source: String = "SAVED",
     )
 
     data class Watched(val id: String, val title: String, val channel: String, val channelId: String, val ts: Long)
@@ -37,10 +38,26 @@ class SqliteVerdictStore(context: Context) :
                 "who TEXT NOT NULL DEFAULT 'parent')"
         )
         db.execSQL(
-            "CREATE TABLE hidden (id TEXT PRIMARY KEY, title TEXT, channel TEXT, reason TEXT, p REAL, ts INTEGER NOT NULL)"
+            "CREATE TABLE hidden (id TEXT PRIMARY KEY, title TEXT, channel TEXT, reason TEXT, p REAL, ts INTEGER NOT NULL, source TEXT)"
         )
         createHistory(db)
+        createMetadata(db)
     }
+
+    private fun createMetadata(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS video_metadata (id TEXT PRIMARY KEY, title TEXT, channel TEXT, channelId TEXT, context TEXT)")
+    }
+
+    private fun rememberVideo(video: VideoInfo) {
+        writableDatabase.insertWithOnConflict("video_metadata", null, ContentValues().apply {
+            put("id", video.id); put("title", video.title); put("channel", video.channel)
+            put("channelId", video.channelId); put("context", video.context)
+        }, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    fun videoInfo(id: String): VideoInfo? = readableDatabase.rawQuery(
+        "SELECT title, channel, channelId, context FROM video_metadata WHERE id = ?", arrayOf(id)
+    ).use { c -> if (c.moveToFirst()) VideoInfo(id, c.getString(0) ?: "", c.getString(1) ?: "", c.getString(3) ?: "", c.getString(2) ?: "") else null }
 
     private fun createHistory(db: SQLiteDatabase) {
         db.execSQL(
@@ -78,6 +95,10 @@ class SqliteVerdictStore(context: Context) :
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) db.execSQL("ALTER TABLE overrides ADD COLUMN who TEXT NOT NULL DEFAULT 'parent'")
         if (oldVersion < 3) createHistory(db)
+        if (oldVersion < 4) {
+            createMetadata(db)
+            db.execSQL("ALTER TABLE hidden ADD COLUMN source TEXT")
+        }
     }
 
     override fun cachedScore(id: String, configHash: String): Score? =
@@ -86,6 +107,7 @@ class SqliteVerdictStore(context: Context) :
         }
 
     override fun saveScore(score: Score, configHash: String, video: VideoInfo) {
+        rememberVideo(video)
         writableDatabase.insertWithOnConflict(
             "scores", null,
             ContentValues().apply {
@@ -127,6 +149,7 @@ class SqliteVerdictStore(context: Context) :
     }
 
     override fun recordHidden(video: VideoInfo, decision: Decision) {
+        rememberVideo(video)
         writableDatabase.insertWithOnConflict(
             "hidden", null,
             ContentValues().apply {
@@ -134,6 +157,7 @@ class SqliteVerdictStore(context: Context) :
                 put("title", video.title)
                 put("channel", video.channel)
                 put("reason", decision.reason)
+                put("source", decision.source.name)
                 if (decision.score != null) put("p", decision.score) else putNull("p")
                 put("ts", System.currentTimeMillis())
             },
@@ -143,14 +167,14 @@ class SqliteVerdictStore(context: Context) :
 
     fun recentlyHidden(limit: Int = 100): List<HiddenVideo> =
         readableDatabase.rawQuery(
-            "SELECT id, title, channel, reason, p FROM hidden ORDER BY ts DESC LIMIT $limit", null
+            "SELECT id, title, channel, reason, p, source FROM hidden ORDER BY ts DESC LIMIT $limit", null
         ).use { c ->
             buildList {
                 while (c.moveToNext()) {
                     add(
                         HiddenVideo(
                             c.getString(0), c.getString(1) ?: "", c.getString(2) ?: "", c.getString(3) ?: "",
-                            if (c.isNull(4)) null else c.getDouble(4),
+                            if (c.isNull(4)) null else c.getDouble(4), c.getString(5) ?: "SAVED",
                         )
                     )
                 }

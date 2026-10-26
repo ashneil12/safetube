@@ -16,6 +16,10 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.webkit.WebViewAssetLoader
 import app.safetube.core.ChannelBlocklist
+import app.safetube.core.DecisionEngine
+import app.safetube.core.InMemoryVerdictStore
+import app.safetube.core.Decision
+import app.safetube.core.DecisionSource
 import app.safetube.core.Classifiers
 import app.safetube.core.KeywordFilter
 import app.safetube.core.KeywordSuggester
@@ -162,6 +166,14 @@ class ParentActivity : Activity() {
             if (!allowed()) return
             val o = JSONObject(json)
             prefs.rules = o.optString("rules").trim()
+            prefs.allowedContent = o.optString("allowedContent").trim()
+            prefs.exceptions = o.optString("exceptions").trim()
+            prefs.blockOnAiFailure = o.optBoolean("blockOnAiFailure", true)
+            o.optJSONObject("fallbackProvider")?.let { p ->
+                prefs.fallbackProvider = ProviderConfig(enumOr(p.optString("type"), ProviderType.NONE),
+                    p.optString("apiKey").trim(), p.optString("baseUrl").trim(), p.optString("model").trim(),
+                    p.optString("accountId").trim(), p.optBoolean("sendThumbnails", true))
+            }
             val words = o.optJSONArray("keywords") ?: JSONArray()
             prefs.keywords = (0 until words.length()).map { words.optString(it).trim() }.filter { it.isNotEmpty() }
                 .distinct().joinToString(", ")
@@ -200,6 +212,7 @@ class ParentActivity : Activity() {
         fun call(name: String, argsJson: String, id: Int) {
             if (!allowed()) return
             val args = try { JSONObject(argsJson) } catch (e: Exception) { JSONObject() }
+            val version = prefs.version
             io.execute {
                 val result = try {
                     when (name) {
@@ -213,6 +226,7 @@ class ParentActivity : Activity() {
                     JSONObject().put("error", e.message ?: e.toString())
                 }
                 main.post {
+                    if (!allowed() || (name != "blockLink" && version != prefs.version) || isFinishing || isDestroyed) return@post
                     webView.evaluateJavascript("window.__parent.done($id, ${JSONObject.quote(result.toString())})", null)
                 }
             }
@@ -250,7 +264,7 @@ class ParentActivity : Activity() {
 
         @JavascriptInterface
         fun openLink(url: String) {
-            if (!url.startsWith("https://")) return
+            if (!allowed() || !url.startsWith("https://")) return
             main.post {
                 try {
                     startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
@@ -286,6 +300,12 @@ class ParentActivity : Activity() {
 
     private fun settingsJson() = JSONObject()
         .put("rules", prefs.rules)
+        .put("allowedContent", prefs.allowedContent)
+        .put("exceptions", prefs.exceptions)
+        .put("blockOnAiFailure", prefs.blockOnAiFailure)
+        .put("fallbackProvider", prefs.fallbackProvider.let { p -> JSONObject()
+            .put("type", p.type.name).put("apiKey", p.apiKey).put("baseUrl", p.baseUrl)
+            .put("model", p.model).put("accountId", p.accountId).put("sendThumbnails", p.sendThumbnails) })
         .put("keywords", JSONArray(KeywordFilter.parseList(prefs.keywords)))
         .put("strictness", prefs.strictness.name)
         .put(
@@ -326,11 +346,36 @@ class ParentActivity : Activity() {
     }
 
     private fun lookup(id: String): JSONObject {
-        val info = if (VideoInfo.isValidId(id)) YouTubeOEmbed.fetch(id) else null
+        if (!allowed() || !VideoInfo.isValidId(id)) return JSONObject().put("error", "Video unavailable")
+        val info = YouTubeOEmbed.fetch(id)
+        val savedInfo = store.videoInfo(id)
+        val hidden = store.recentlyHidden().firstOrNull { it.id == id }
+        val watched = store.history().firstOrNull { it.id == id }
+        val choice = store.parentChoices().firstOrNull { it.id == id }
+        val settings = prefs.filterSettings()
+        val score = store.cachedScore(id, settings.aiConfigHash())
+        val video = VideoInfo(id, info?.title?.ifBlank { savedInfo?.title ?: "" } ?: savedInfo?.title ?: hidden?.title ?: watched?.title ?: choice?.title ?: "",
+            info?.channel?.ifBlank { savedInfo?.channel ?: "" } ?: savedInfo?.channel ?: hidden?.channel ?: watched?.channel ?: "",
+            savedInfo?.context ?: "", info?.channelId?.ifBlank { savedInfo?.channelId ?: "" } ?: savedInfo?.channelId ?: watched?.channelId ?: "")
+        val channelMatch = ChannelBlocklist(settings.blockedChannels).match(video)
+        val keywordMatch = KeywordFilter(settings.blockedKeywords).firstMatch(video.allText)
+        val local = when {
+            choice != null -> Decision(id, choice.verdict, DecisionSource.PARENT, reason = "Set by ${choice.by}")
+            channelMatch != null -> Decision(id, Verdict.BLOCK, DecisionSource.CHANNEL, reason = "Blocked channel: $channelMatch")
+            keywordMatch != null -> Decision(id, Verdict.BLOCK, DecisionSource.KEYWORD, reason = "Keyword: $keywordMatch")
+            else -> null
+        }
         return JSONObject()
-            .put("title", info?.title ?: "")
-            .put("channel", info?.channel ?: "")
-            .put("channelId", info?.channelId ?: "")
+            .put("id", id)
+            .put("description", savedInfo?.context?.takeIf { it.isNotBlank() } ?: "A full description is not available from YouTube’s public preview. Open the video on YouTube to inspect it.")
+            .put("reason", local?.reason ?: score?.reason ?: hidden?.reason?.let { "Last recorded decision: $it" } ?: "No saved decision for these rules")
+            .put("source", local?.source?.name ?: if (score != null) "AI" else hidden?.source ?: "")
+            .put("score", if (local == null) score?.p ?: JSONObject.NULL else JSONObject.NULL)
+            .put("threshold", settings.strictness.blockAtOrAbove)
+            .put("verdict", local?.verdict?.wire ?: score?.let { settings.strictness.verdictFor(it.p).wire } ?: hidden?.let { "block" } ?: JSONObject.NULL)
+            .put("title", video.title)
+            .put("channel", video.channel)
+            .put("channelId", video.channelId)
     }
 
     private fun suggest(args: JSONObject): JSONObject {
@@ -351,19 +396,19 @@ class ParentActivity : Activity() {
     /** Runs the saved rules against two example videos so the parent can see it working. */
     private fun testAi(): JSONObject {
         val settings = prefs.filterSettings()
-        val classifier = Classifiers.create(settings.provider.copy(sendThumbnails = false))
-            ?: return JSONObject().put("error", "Pick a checker first.")
         val samples = listOf(
             VideoInfo("aaaaaaaaaaa", "Five Little Pumpkins | Halloween Song for Kids", "Sing Along Street"),
             VideoInfo("bbbbbbbbbbb", "Counting to 20 with Building Blocks", "Number Garden"),
         )
-        val scores = classifier.classify(samples, settings.rules).associateBy { it.id }
+        val decisions = DecisionEngine(InMemoryVerdictStore(), metadata = null).decide(samples,
+            settings.copy(provider = settings.provider.copy(sendThumbnails = false),
+                fallbackProvider = settings.fallbackProvider.copy(sendThumbnails = false))).associateBy { it.id }
         return JSONObject().put("results", JSONArray(samples.map { v ->
-            val s = scores[v.id]
+            val decision = decisions[v.id]
             JSONObject()
                 .put("title", v.title)
-                .put("hidden", s != null && settings.strictness.verdictFor(s.p) == Verdict.BLOCK)
-                .put("reason", s?.reason ?: "No answer")
+                .put("hidden", decision?.verdict != Verdict.ALLOW)
+                .put("reason", decision?.reason ?: "No answer")
         }))
     }
 

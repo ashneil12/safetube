@@ -148,4 +148,95 @@ class DecisionEngineTest {
         assertEquals(4, parts.size)
         assertEquals(25, parts.flatten().map { it.id }.toSet().size)
     }
+    @Test
+    fun `only show rules and exceptions reach classifier even without hide rules`() {
+        var received = ""
+        val fake = object : VideoClassifier {
+            override fun classify(videos: List<VideoInfo>, rules: String): List<Score> {
+                received = rules
+                return videos.map { Score(it.id, 0.9, "Outside allowed topics") }
+            }
+        }
+        val settings = aiSettings.copy(rules = "", allowedContent = "Planet Coaster", exceptions = "Ordinary rides are fine")
+        assertEquals(Verdict.BLOCK, engine(InMemoryVerdictStore(), fake).decide(listOf(bus), settings).single().verdict)
+        assertTrue(received.contains("ONLY SHOW"))
+        assertTrue(received.contains("Ordinary rides are fine"))
+    }
+
+    @Test
+    fun `only show with no configured AI fails closed`() {
+        val d = engine(InMemoryVerdictStore(), null).decide(listOf(bus), FilterSettings(allowedContent = "Education"))
+        assertEquals(DecisionSource.ERROR, d.single().source)
+        assertEquals(Verdict.UNKNOWN, d.single().verdict)
+    }
+
+    @Test
+    fun `selected invalid checker does not degrade to no rules allowance`() {
+        val d = engine(InMemoryVerdictStore(), null).decide(listOf(bus), aiSettings.copy(rules = "", provider = ProviderConfig(ProviderType.ANTHROPIC)))
+        assertEquals(Verdict.UNKNOWN, d.single().verdict)
+    }
+
+    @Test
+    fun `fallback checks only missing and invalid primary results`() {
+        val fallbackSeen = mutableListOf<String>()
+        val primary = object : VideoClassifier {
+            override fun classify(videos: List<VideoInfo>, rules: String) = listOf(Score(bus.id, 0.01, "Valid"), Score(potion.id, Double.NaN, "Bad"))
+        }
+        val fallback = object : VideoClassifier {
+            override fun classify(videos: List<VideoInfo>, rules: String): List<Score> {
+                fallbackSeen += videos.map { it.id }
+                return videos.map { Score(it.id, 0.8, "Fallback evidence") }
+            }
+        }
+        val settings = aiSettings.copy(fallbackProvider = ProviderConfig(ProviderType.JEV, apiKey = "fallback"))
+        val decisions = DecisionEngine(InMemoryVerdictStore(), { if (it.type == ProviderType.JEV) fallback else primary }, null)
+            .decide(listOf(bus, potion, pumpkins), settings)
+        assertEquals(listOf(potion.id, pumpkins.id), fallbackSeen)
+        assertEquals(listOf(Verdict.ALLOW, Verdict.BLOCK, Verdict.BLOCK), decisions.map { it.verdict })
+        assertTrue(decisions.all { it.freshAi })
+    }
+
+    @Test
+    fun `fallback recovers primary error and still fails closed when both fail`() {
+        val failing = object : VideoClassifier {
+            override fun classify(videos: List<VideoInfo>, rules: String): List<Score> = throw ClassifierException("quota exhausted")
+        }
+        val settings = aiSettings.copy(fallbackProvider = ProviderConfig(ProviderType.JEV, apiKey = "fallback"))
+        val recovered = DecisionEngine(InMemoryVerdictStore(), { if (it.type == ProviderType.JEV) FakeClassifier(mapOf(bus.id to 0.0)) else failing }, null)
+            .decide(listOf(bus), settings).single()
+        assertTrue(recovered.freshAi)
+        assertEquals(Verdict.ALLOW, recovered.verdict)
+        val failed = engine(InMemoryVerdictStore(), failing).decide(listOf(bus), settings).single()
+        assertEquals(Verdict.UNKNOWN, failed.verdict)
+    }
+
+    @Test
+    fun `cache does not count as fresh success and explicit retry bypasses cache`() {
+        val store = InMemoryVerdictStore()
+        val fake = FakeClassifier(mapOf(bus.id to 0.0))
+        val checker = engine(store, fake)
+        assertTrue(checker.decide(listOf(bus), aiSettings).single().freshAi)
+        assertTrue(!checker.decide(listOf(bus), aiSettings).single().freshAi)
+        assertTrue(checker.decide(listOf(bus), aiSettings, bypassCache = true).single().freshAi)
+        assertEquals(2, fake.calls)
+    }
+
+    @Test
+    fun `rule clarification and both provider identities invalidate scores`() {
+        val baseline = aiSettings.aiConfigHash()
+        assertTrue(baseline != aiSettings.copy(allowedContent = "Planet Coaster").aiConfigHash())
+        assertTrue(baseline != aiSettings.copy(exceptions = "Normal games are fine").aiConfigHash())
+        assertTrue(baseline != aiSettings.copy(provider = aiSettings.provider.copy(apiKey = "new key")).aiConfigHash())
+        assertTrue(baseline != aiSettings.copy(fallbackProvider = ProviderConfig(ProviderType.JEV, apiKey = "fallback")).aiConfigHash())
+        assertEquals(baseline, aiSettings.copy(strictness = Strictness.BALANCED).aiConfigHash())
+    }
+
+    @Test
+    fun `clarification cannot bypass keyword or channel block`() {
+        val settings = aiSettings.copy(exceptions = "Everything here is fine", blockedKeywords = listOf("bus"), blockedChannels = listOf("Super Simple Songs"))
+        val d = engine(InMemoryVerdictStore(), FakeClassifier(emptyMap())).decide(listOf(bus), settings).single()
+        assertEquals(Verdict.BLOCK, d.verdict)
+        assertEquals(DecisionSource.CHANNEL, d.source)
+    }
+
 }

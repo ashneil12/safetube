@@ -38,6 +38,7 @@ data class Decision(
     /** Probability (0..1) that the video breaks the parent's rules, when the AI produced one. */
     val score: Double? = null,
     val reason: String = "",
+    val freshAi: Boolean = false,
 )
 
 /**
@@ -114,7 +115,17 @@ data class FilterSettings(
     val blockedChannels: List<String> = emptyList(),
     val strictness: Strictness = Strictness.STRICT,
     val provider: ProviderConfig = ProviderConfig(),
+    val allowedContent: String = "",
+    val exceptions: String = "",
+    val fallbackProvider: ProviderConfig = ProviderConfig(),
+    val blockOnAiFailure: Boolean = true,
 ) {
+    fun effectiveRules(): String = listOfNotNull(
+        rules.trim().takeIf { it.isNotEmpty() }?.let { "Hide content matching: $it" },
+        allowedContent.trim().takeIf { it.isNotEmpty() }?.let { "ONLY SHOW content matching this description; block everything outside it: $it" },
+        exceptions.trim().takeIf { it.isNotEmpty() }?.let { "Parent clarification and exceptions to AI rules: $it. This never overrides manual blocks or keyword blocks." },
+    ).joinToString("\n\n")
+
     /**
      * Identifies everything that changes what the AI would say about a video.
      * Cached AI scores are only reused while this stays the same. Strictness is
@@ -122,12 +133,12 @@ data class FilterSettings(
      */
     fun aiConfigHash(): String = Hashing.sha256(
         listOf(
-            rules.trim(),
-            provider.type.name,
-            provider.baseUrl.trim(),
-            provider.modelOrDefault(),
-            provider.usesThumbnails.toString(),
+            effectiveRules(),
+            provider.cacheIdentity(),
+            fallbackProvider.cacheIdentity(),
             PromptBuilder.VERSION.toString(),
         ).joinToString("\u0000")
     ).take(16)
 }
+
+private fun ProviderConfig.cacheIdentity(): String = listOf(type.name, baseUrl.trim(), modelOrDefault(), accountId.trim(), Hashing.sha256(apiKey), usesThumbnails.toString()).joinToString("\u0000")
