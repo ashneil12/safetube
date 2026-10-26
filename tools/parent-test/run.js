@@ -298,6 +298,16 @@ function fakeApp(mode) {
   await page.waitForTimeout(100);
   check('testing shows what would be hidden', (await page.textContent('[data-out]')).includes('Hidden'));
   await shot(page, '07-smart-checker');
+  await page.evaluate(() => {
+    window.__originalCall = window.SafeTubeParent.call;
+    window.SafeTubeParent.call = (name, args, id) => {
+      if (name === 'testAi') setTimeout(() => window.__parent.done(id, JSON.stringify({ error: 'The API key was rejected. Paste a valid key and try again.' })), 1);
+      else window.__originalCall(name, args, id);
+    };
+  });
+  await page.click('#form [data-test]'); await page.waitForTimeout(100);
+  check('checker test failure shows actionable error without successful decision tags', (await page.textContent('#form [data-out]')).includes('Paste a valid key') && await page.locator('#form [data-out] .tag').count() === 0);
+  await page.evaluate(() => { window.SafeTubeParent.call = window.__originalCall; });
 
   await page.click('[data-page="rules"]');
   await page.click('[data-suggest]');
@@ -405,6 +415,29 @@ function fakeApp(mode) {
       await page.click('#form [data-type="OPENROUTER_DECISIONS"]');
       check('Jev to recommended Decisions preserves the key for the same OpenRouter service', await page.evaluate(() => window.__settings.provider.type === 'OPENROUTER_DECISIONS' && window.__settings.provider.apiKey === 'existing-key'));
     }
+    if (type === 'OPENAI_COMPATIBLE') {
+      await page.fill('#form [data-field="baseUrl"]', 'https://existing.example/another/path/');
+      await page.dispatchEvent('#form [data-field="baseUrl"]', 'change');
+      await page.fill('#form [data-field="model"]', 'another-model');
+      await page.dispatchEvent('#form [data-field="model"]', 'change');
+      check('compatible path and model edits preserve the same-origin key', await page.evaluate(() => window.__settings.provider.apiKey === 'existing-key'));
+      for (const url of ['http://existing.example/v1', 'http://existing.example:8080/v1', 'https://different.example/v1', '', 'invalid URL']) {
+        await page.fill('#form [data-field="apiKey"]', 'key-for-current-service');
+        await page.dispatchEvent('#form [data-field="apiKey"]', 'change');
+        await page.fill('#form [data-field="baseUrl"]', url);
+        await page.dispatchEvent('#form [data-field="baseUrl"]', 'change');
+        check(`compatible destination change clears credentials: ${url || '(blank)'}`, await page.evaluate(() => window.__settings.provider.apiKey === '') && await page.inputValue('#form [data-field="apiKey"]') === '');
+      }
+      await page.click('#backup-form [data-type="OPENAI_COMPATIBLE"]');
+      await page.fill('#backup-form [data-field="apiKey"]', 'backup-service-key');
+      await page.dispatchEvent('#backup-form [data-field="apiKey"]', 'change');
+      await page.fill('#backup-form [data-field="baseUrl"]', 'https://existing.example/another/');
+      await page.dispatchEvent('#backup-form [data-field="baseUrl"]', 'change');
+      check('backup compatible path edits preserve its same-origin key', await page.evaluate(() => window.__settings.fallbackProvider.apiKey === 'backup-service-key'));
+      await page.fill('#backup-form [data-field="baseUrl"]', 'https://other-backup.example/v1');
+      await page.dispatchEvent('#backup-form [data-field="baseUrl"]', 'change');
+      check('backup compatible origin changes clear the old service key', await page.evaluate(() => window.__settings.fallbackProvider.apiKey === ''));
+    }
     if (type === 'OPENROUTER_DECISIONS') {
       await page.fill('#form [data-field="model"]', 'typesafe/jev-1.14');
       await page.dispatchEvent('#form [data-field="model"]', 'change');
@@ -423,6 +456,35 @@ function fakeApp(mode) {
     }
     await page.close();
   }
+  const existingHelper = { type: 'OPENAI_COMPATIBLE', apiKey: 'existing-helper-key', baseUrl: 'https://helper.example/v1', model: 'helper-model' };
+  page = await open('unlock', null, { helper: existingHelper });
+  await typePin(page, '1234'); await page.click('[data-page="checker"]');
+  check('opening the helper preserves its saved destination and credential', JSON.stringify(await page.evaluate(() => window.__settings.helper)) === JSON.stringify(existingHelper));
+  await page.click('#helper [data-edit]');
+  await page.fill('#helper [data-h="baseUrl"]', 'https://helper.example/another/path/');
+  await page.dispatchEvent('#helper [data-h="baseUrl"]', 'change');
+  await page.fill('#helper [data-h="model"]', 'new-helper-model');
+  await page.click('#helper [data-done]');
+  check('helper same-origin paths and model edits keep its key', await page.evaluate(() => window.__settings.helper.apiKey === 'existing-helper-key' && window.__settings.helper.model === 'new-helper-model'));
+  await page.click('#helper [data-edit]');
+  await page.selectOption('#helper [data-htype]', 'ANTHROPIC');
+  check('changing helper service clears the previous service key', await page.inputValue('#helper [data-h="apiKey"]') === '');
+  await page.selectOption('#helper [data-htype]', 'OPENAI_COMPATIBLE');
+  for (const url of ['https://helper.example:8080/v1', 'not a valid URL', '']) {
+    await page.fill('#helper [data-h="apiKey"]', 'replacement-helper-key');
+    await page.fill('#helper [data-h="baseUrl"]', url);
+    await page.dispatchEvent('#helper [data-h="baseUrl"]', 'change');
+    check(`helper destination change clears credentials: ${url || '(blank)'}`, await page.inputValue('#helper [data-h="apiKey"]') === '');
+  }
+  await page.click('#helper [data-done]');
+  check('helper persists no retained foreign-service key after destination changes', await page.evaluate(() => window.__settings.helper.apiKey === '' && window.__settings.helper.type === 'NONE'));
+  await page.close();
+  page = await open('unlock', null, { helper: { ...existingHelper, type: 'NONE', apiKey: 'inactive-old-key' } });
+  await typePin(page, '1234'); await page.click('[data-page="checker"]');
+  check('loading an inactive helper does not change saved settings', await page.evaluate(() => window.__settings.helper.apiKey === 'inactive-old-key'));
+  await page.click('#helper [data-edit]');
+  check('activating another helper does not expose an inactive retained credential', await page.inputValue('#helper [data-h="apiKey"]') === '');
+  await page.close();
   page = await open('unlock', { width: 390, height: 844 }, { provider: { type: 'OPENROUTER_DECISIONS', apiKey: 'test-key', model: '', sendThumbnails: false } });
   await typePin(page, '1234'); await page.click('[data-page="checker"]');
   check('simple checker fits a phone without sideways scrolling', await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));

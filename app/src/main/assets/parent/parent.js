@@ -980,6 +980,14 @@
   }
 
   // The provider picker and its fields; used on the checker page and in setup.
+  function sameCredentialOrigin(before, after) {
+    try {
+      if (!before || !before.trim() || !after || !after.trim()) return false;
+      const origin = new URL(before).origin;
+      return origin !== 'null' && origin === new URL(after).origin;
+    } catch (e) { return false; }
+  }
+
   function checkerForm(box, { compact, fallback = false } = {}) {
     ensureSettings();
     const p = fallback ? S.settings.fallbackProvider : S.settings.provider;
@@ -1033,8 +1041,14 @@
       checkerForm(box, { compact, fallback });
     }));
     box.querySelectorAll('[data-field]').forEach((input) => input.addEventListener('change', () => {
-      p[input.dataset.field] = input.value.trim();
-      save('Saved');
+      const value = input.value.trim();
+      const changedService = input.dataset.field === 'baseUrl' && !sameCredentialOrigin(p.baseUrl, value);
+      if (changedService) {
+        p.apiKey = '';
+        box.querySelector('[data-field="apiKey"]').value = '';
+      }
+      p[input.dataset.field] = value;
+      save(changedService ? 'Paste the API key for this service.' : 'Saved');
       if (input.dataset.field === 'model') box.querySelector('[data-custom-model-note]').innerHTML = customDecisionNotice(p);
     }));
     const resetModel = box.querySelector('[data-reset-model]');
@@ -1127,10 +1141,13 @@
         <div class="chips"><button class="btn btn-primary btn-small" data-done>Done</button></div>`}`;
     const on = (sel, fn) => { const el = box.querySelector(sel); if (el) el.addEventListener('click', fn); };
     on('[data-edit]', () => {
-      if (h.type === 'NONE') { h.type = 'OPENAI_COMPATIBLE'; h.baseUrl = ''; h.model = ''; }
+      if (h.type === 'NONE') { h.type = 'OPENAI_COMPATIBLE'; h.apiKey = ''; h.baseUrl = ''; h.model = ''; }
       helperCard(box, true);
     });
     on('[data-gemini]', () => {
+      if (h.type !== 'OPENAI_COMPATIBLE' || !sameCredentialOrigin(h.baseUrl, S.defaults.geminiBaseUrl)) {
+        h.apiKey = ''; toast('Paste your Gemini API key.');
+      }
       h.type = 'OPENAI_COMPATIBLE';
       h.baseUrl = S.defaults.geminiBaseUrl;
       h.model = S.defaults.geminiModel;
@@ -1145,8 +1162,18 @@
     const sel = box.querySelector('[data-htype]');
     if (sel) sel.addEventListener('change', () => {
       box.querySelectorAll('[data-h]').forEach((i) => { h[i.dataset.h] = i.value.trim(); });
+      if (h.type !== sel.value) { h.apiKey = ''; toast('Paste the API key for this helper service.'); }
       h.type = sel.value;
       helperCard(box, true);
+    });
+    const helperUrl = box.querySelector('[data-h="baseUrl"]');
+    if (helperUrl) helperUrl.addEventListener('change', () => {
+      const value = helperUrl.value.trim();
+      if (!sameCredentialOrigin(h.baseUrl, value)) {
+        h.apiKey = ''; box.querySelector('[data-h="apiKey"]').value = '';
+        toast('Paste the API key for this helper service.');
+      }
+      h.baseUrl = value;
     });
     const link = box.querySelector('[data-link]');
     if (link) link.addEventListener('click', (e) => { e.preventDefault(); B.openLink(link.dataset.link); });
