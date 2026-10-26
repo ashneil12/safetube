@@ -47,6 +47,27 @@ public final class DecisionEngine {
         return input.filter { seen.insert($0.id).inserted }.compactMap { all[$0.id] }
     }
 
+    /// Verify checker recovery using a real submitted video without changing its local verdict.
+    /// The isolated store prevents parent overrides and cached scores from faking a successful check.
+    public func probeAiAvailability(_ input: [VideoInfo], _ settings: FilterSettings) -> Bool {
+        let valid = input.filter { VideoInfo.isValidId($0.id) }
+        let video: VideoInfo?
+        if let titled = valid.first(where: { !$0.title.isBlank }) {
+            video = titled
+        } else if let raw = valid.first, let looked = metadata?.fetch(raw.id) {
+            video = DecisionEngine.merge(looked, into: raw)
+        } else {
+            video = nil
+        }
+        guard let candidate = video, !candidate.title.isBlank else { return false }
+        var probeSettings = settings
+        probeSettings.blockedKeywords = []
+        probeSettings.blockedChannels = []
+        let isolated = DecisionEngine(InMemoryVerdictStore(), classifierFactory: classifierFactory, metadata: nil)
+        let result = isolated.decide([candidate], probeSettings, forceFresh: true)
+        return result.count == 1 && result[0].freshAi && result[0].source == .ai
+    }
+
     /// Same as the other decide(), but hands results over as soon as they're known: everything that
     /// needs no AI first, then each AI batch as it comes back. Returns once every video has been sent.
     /// `emit` may be called from several threads at once when `aiPool` is set.

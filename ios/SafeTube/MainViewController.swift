@@ -263,16 +263,16 @@ final class MainViewController: UIViewController, WKNavigationDelegate, WKUIDele
         let generation = pageGeneration
         let engine = self.engine
         bridgeQueue.addOperation { [weak self] in
-            let deliver: ([Decision]) -> Void = { decisions in
+            let deliver: ([Decision], Bool, Bool) -> Void = { decisions, recoveredByProbe, failedProbe in
                 DispatchQueue.main.async {
                     guard let self = self, self.prefs.version == version, self.pageGeneration == generation else { return }
                     let wasUnavailable = self.aiUnavailable
                     let errors = decisions.filter { $0.source == .error }
-                    if settings.blockOnAiFailure && !errors.isEmpty {
+                    if settings.blockOnAiFailure && (!errors.isEmpty || failedProbe) {
                         self.aiFailureRevision += 1
                         self.aiUnavailable = true
-                        self.showAiError(errors[0].reason)
-                    } else if forceFresh && self.aiFailureRevision == failureRevision && decisions.contains(where: { $0.freshAi }) {
+                        self.showAiError(errors.first?.reason ?? "AI retry could not verify the checker. Check the connection or backup provider.")
+                    } else if forceFresh && self.aiFailureRevision == failureRevision && (recoveredByProbe || decisions.contains(where: { $0.freshAi })) {
                         self.aiUnavailable = false
                     }
                     if wasUnavailable != self.aiUnavailable { self.installScripts(self.webView.configuration.userContentController) }
@@ -284,9 +284,12 @@ final class MainViewController: UIViewController, WKNavigationDelegate, WKUIDele
                 }
             }
             if forceFresh {
-                deliver(engine.decide(videos, settings, forceFresh: true))
+                let decisions = engine.decide(videos, settings, forceFresh: true)
+                let needsProbe = !decisions.contains(where: { $0.source == .error || $0.freshAi })
+                let recovered = needsProbe && engine.probeAiAvailability(videos, settings)
+                deliver(decisions, recovered, needsProbe && !recovered)
             } else {
-                engine.decide(videos, settings, emit: deliver)
+                engine.decide(videos, settings) { deliver($0, false, false) }
             }
         }
     }

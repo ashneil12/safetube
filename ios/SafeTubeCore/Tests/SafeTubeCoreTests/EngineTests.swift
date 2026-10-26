@@ -417,3 +417,41 @@ final class AiConfigurationProtectionTests: XCTestCase {
         XCTAssertFalse(FilterSettings(allowedContent: "Planet Coaster", blockOnAiFailure: false).mustBlockForAiConfiguration)
     }
 }
+
+final class AvailabilityProbeTests: XCTestCase {
+    let video = VideoInfo("aaaaaaaaaaa", "Planet Coaster park tour", "Park videos")
+    var settings: FilterSettings {
+        FilterSettings(rules: "No violence", blockedKeywords: ["coaster"], blockedChannels: ["Park videos"],
+            provider: ProviderConfig(.anthropic, apiKey: "test"))
+    }
+    func testProbeChecksAiButPreservesManualAndKeywordDecisionsAndCache() {
+        let store = InMemoryVerdictStore()
+        store.setOverride(video.id, .block)
+        let fake = RecoveryAndRuleTests.Stub([Score(video.id, 0.01, "park tour")])
+        let engine = DecisionEngine(store, classifierFactory: { _ in fake }, metadata: nil)
+        XCTAssertTrue(engine.probeAiAvailability([video], settings))
+        XCTAssertEqual(fake.seen, [[video.id]])
+        XCTAssertEqual(engine.decide([video], settings).first?.source, .parent)
+        XCTAssertNil(store.cachedScore(video.id, configHash: settings.aiConfigHash()))
+        store.setOverride(video.id, nil)
+        XCTAssertEqual(engine.decide([video], settings).first?.source, .channel)
+    }
+    func testProbeCannotSucceedWithoutRealTitleOrWithAiFailure() {
+        let fake = RecoveryAndRuleTests.Stub(fails: true)
+        let engine = DecisionEngine(InMemoryVerdictStore(), classifierFactory: { _ in fake }, metadata: nil)
+        XCTAssertFalse(engine.probeAiAvailability([VideoInfo(video.id)], settings))
+        XCTAssertTrue(fake.seen.isEmpty)
+        XCTAssertFalse(engine.probeAiAvailability([video], settings))
+    }
+    func testProbeCanUseRealMetadataAndFallbackWithoutSavingScore() {
+        let fail = RecoveryAndRuleTests.Stub(fails: true)
+        let backup = RecoveryAndRuleTests.Stub([Score(video.id, 0.8, "rule match")])
+        var config = settings
+        config.fallbackProvider = ProviderConfig(.jev, apiKey: "backup")
+        let info = video
+        let engine = DecisionEngine(InMemoryVerdictStore(), classifierFactory: { $0.type == .jev ? backup : fail },
+            metadata: MetadataLookup { _ in info })
+        XCTAssertTrue(engine.probeAiAvailability([VideoInfo(video.id)], config))
+        XCTAssertEqual(backup.seen, [[video.id]])
+    }
+}
