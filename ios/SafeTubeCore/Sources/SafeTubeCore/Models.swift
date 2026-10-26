@@ -56,13 +56,15 @@ public struct Decision: Equatable {
     /// Probability (0..1) that the video breaks the parent's rules, when the AI produced one.
     public let score: Double?
     public let reason: String
+    public let freshAi: Bool
 
-    public init(_ id: String, _ verdict: Verdict, _ source: DecisionSource, score: Double? = nil, reason: String = "") {
+    public init(_ id: String, _ verdict: Verdict, _ source: DecisionSource, score: Double? = nil, reason: String = "", freshAi: Bool = false) {
         self.id = id
         self.verdict = verdict
         self.source = source
         self.score = score
         self.reason = reason
+        self.freshAi = freshAi
     }
 }
 
@@ -165,28 +167,44 @@ public struct FilterSettings {
     public var blockedChannels: [String]
     public var strictness: Strictness
     public var provider: ProviderConfig
+    public var allowedContent: String
+    public var exceptions: String
+    public var fallbackProvider: ProviderConfig
+    public var blockOnAiFailure: Bool
 
     public init(rules: String = "", blockedKeywords: [String] = [], blockedChannels: [String] = [],
-                strictness: Strictness = .strict, provider: ProviderConfig = ProviderConfig()) {
+                strictness: Strictness = .strict, provider: ProviderConfig = ProviderConfig(),
+                allowedContent: String = "", exceptions: String = "",
+                fallbackProvider: ProviderConfig = ProviderConfig(), blockOnAiFailure: Bool = true) {
         self.rules = rules
         self.blockedKeywords = blockedKeywords
         self.blockedChannels = blockedChannels
         self.strictness = strictness
         self.provider = provider
+        self.allowedContent = allowedContent
+        self.exceptions = exceptions
+        self.fallbackProvider = fallbackProvider
+        self.blockOnAiFailure = blockOnAiFailure
+    }
+
+    public func effectiveRules() -> String {
+        var parts: [String] = []
+        if !rules.isBlank { parts.append("Hide content matching: " + rules.trimmed) }
+        if !allowedContent.isBlank { parts.append("ONLY SHOW content matching this description; block everything outside it: " + allowedContent.trimmed) }
+        if !exceptions.isBlank { parts.append("Parent clarification and exceptions to AI rules: " + exceptions.trimmed + ". This never overrides manual blocks or keyword blocks.") }
+        return parts.joined(separator: "\n\n")
     }
 
     /// Identifies everything that changes what the AI would say about a video.
     /// Cached AI scores are only reused while this stays the same. Strictness is
     /// deliberately left out: scores are cached and the threshold is applied on read.
     public func aiConfigHash() -> String {
-        let parts = [
-            rules.trimmed,
-            provider.type.rawValue,
-            provider.baseUrl.trimmed,
-            provider.modelOrDefault(),
-            String(provider.usesThumbnails),
-            String(PromptBuilder.version),
-        ]
+        let parts = [effectiveRules(), provider.type.rawValue, provider.baseUrl.trimmed,
+            provider.modelOrDefault(), provider.accountId.trimmed, Hashing.sha256(provider.apiKey),
+            String(provider.usesThumbnails), fallbackProvider.type.rawValue,
+            fallbackProvider.baseUrl.trimmed, fallbackProvider.modelOrDefault(),
+            fallbackProvider.accountId.trimmed, Hashing.sha256(fallbackProvider.apiKey),
+            String(fallbackProvider.usesThumbnails), String(PromptBuilder.version)]
         return String(Hashing.sha256(parts.joined(separator: "\u{0}")).prefix(16))
     }
 }

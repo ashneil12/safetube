@@ -42,6 +42,7 @@ final class SqliteVerdictStore: VerdictStore {
         exec("CREATE TABLE IF NOT EXISTS overrides (id TEXT PRIMARY KEY, verdict TEXT NOT NULL, title TEXT, ts INTEGER NOT NULL, " +
              "who TEXT NOT NULL DEFAULT 'parent')")
         exec("CREATE TABLE IF NOT EXISTS hidden (id TEXT PRIMARY KEY, title TEXT, channel TEXT, reason TEXT, p REAL, ts INTEGER NOT NULL)")
+        exec("CREATE TABLE IF NOT EXISTS metadata (id TEXT PRIMARY KEY, title TEXT, channel TEXT, channelId TEXT, description TEXT)")
         exec("CREATE TABLE IF NOT EXISTS history (id TEXT PRIMARY KEY, title TEXT, channel TEXT, channelId TEXT, ts INTEGER NOT NULL)")
     }
 
@@ -80,6 +81,7 @@ final class SqliteVerdictStore: VerdictStore {
     }
 
     func saveScore(_ score: Score, configHash: String, video: VideoInfo) {
+        rememberMetadata(video)
         run("INSERT OR REPLACE INTO scores (id, hash, p, reason, title, ts) VALUES (?, ?, ?, ?, ?, ?)",
             [score.id, configHash, score.p, score.reason, video.title, now()])
     }
@@ -103,6 +105,7 @@ final class SqliteVerdictStore: VerdictStore {
     }
 
     func recordHidden(_ video: VideoInfo, _ decision: Decision) {
+        rememberMetadata(video)
         let p = JSON.orNull(decision.score)
         run("INSERT OR REPLACE INTO hidden (id, title, channel, reason, p, ts) VALUES (?, ?, ?, ?, ?, ?)",
             [video.id, video.title, video.channel, decision.reason, p, now()])
@@ -133,6 +136,42 @@ final class SqliteVerdictStore: VerdictStore {
     func clearDecisions() {
         run("DELETE FROM scores", [])
         run("DELETE FROM hidden", [])
+    }
+
+    private func rememberMetadata(_ video: VideoInfo) {
+        run("INSERT OR REPLACE INTO metadata (id, title, channel, channelId, description) VALUES (?, ?, ?, ?, ?)",
+            [video.id, video.title, video.channel, video.channelId, video.context])
+        run("DELETE FROM metadata WHERE id NOT IN (SELECT id FROM metadata ORDER BY rowid DESC LIMIT 1000)", [])
+    }
+
+    /// Read the score only for current rules; old rule scores must not explain a new decision.
+    func reviewDetails(_ id: String, settings: FilterSettings) -> [String: Any] {
+        let hidden = recentlyHidden().first { $0.id == id }
+        let history = history().first { $0.id == id }
+        var result: [String: Any] = ["title": hidden?.title ?? history?.title ?? "",
+            "channel": hidden?.channel ?? history?.channel ?? "", "channelId": history?.channelId ?? "",
+            "description": "", "threshold": settings.strictness.blockAtOrAbove]
+        if let metadata = query("SELECT title, channel, channelId, description FROM metadata WHERE id = ?", [id], { s in
+            ["title": text(s, 0), "channel": text(s, 1), "channelId": text(s, 2), "description": text(s, 3)]
+        }).first {
+            for (key, value) in metadata where !value.isBlank { result[key] = value }
+        }
+        if let override = parentOverride(id) {
+            result["source"] = DecisionSource.parent.rawValue
+            result["reason"] = "Set by parent"
+            result["verdict"] = override.rawValue
+        } else if let score = cachedScore(id, configHash: settings.aiConfigHash()) {
+            result["source"] = DecisionSource.ai.rawValue
+            result["score"] = score.p
+            result["reason"] = score.reason
+            result["verdict"] = settings.strictness.verdictFor(score.p).rawValue
+        } else if let hidden = hidden {
+            result["reason"] = "Last recorded: " + hidden.reason
+            result["historical"] = true
+            result["source"] = "LAST_RECORDED"
+            result["verdict"] = Verdict.block.rawValue
+        }
+        return result
     }
 
     private func titleFor(_ id: String) -> String? {
