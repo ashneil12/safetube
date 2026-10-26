@@ -24,8 +24,22 @@ rules simply aren't there.
   Blocked videos show YouTube's usual "Video unavailable" screen.
 - **Decisions are remembered.** Each video is checked once per set of rules and cached on
   the device, so it costs almost nothing after the first few days.
-- **Strict / Balanced / Relaxed.** Strict (the default) hides anything the AI isn't fairly
-  sure is fine.
+- **Strict / Balanced / Relaxed.** Choose during setup and change later. Strict hides at an
+  estimated rule-breaking score of 20%, Balanced at 50%, and Relaxed at 80%. These are model
+  estimates, not a guarantee about the actual video.
+- **Only show a topic.** Describe the content you want, such as “Planet Coaster park-building
+  tutorials and educational science.” Videos outside that description are hidden too. This
+  mode requires a working AI checker; keywords alone cannot identify every other topic.
+- **Fine-tune the AI.** Add context such as “Ordinary Planet Coaster gameplay is fine; do not
+  treat the game itself as frightening.” This guides AI judgement. Exact video overrides,
+  blocked channels and keyword matches retain priority. If a keyword is causing the block,
+  remove or narrow that keyword in parent settings.
+- **Backup checker and outage protection.** Configure a second checker for failed or incomplete
+  primary responses. With outage protection enabled (the default), a final AI failure covers
+  and pauses all YouTube content, including previously allowed videos. Retry checks again;
+  cached results alone cannot reopen the page. Unknown videos stay hidden even if whole-app
+  outage protection is switched off. Deliberate keyword-only mode remains available when
+  neither AI filtering nor an only-show rule is selected.
 - **Hold to hide.** Hold any video (or the title of the one playing) and choose "Hide this
   video" or "Hide everything from" its channel, in a menu that looks like YouTube's own. By default children can do this themselves,
   since hiding has no downside; only a parent can bring it back. Turn that off and hiding asks
@@ -35,7 +49,11 @@ rules simply aren't there.
 - **AI-written keyword lists.** Describe what you don't want and a chat model (Gemini's free
   tier works) suggests every keyword it can think of. You review the list before saving.
 - **You stay in charge.** A parent PIN protects the settings. The "Recently hidden" list
-  shows what was hidden and why, with an Allow button for mistakes.
+  shows what was hidden and why, with an Allow button for mistakes. Tap a video in the parent
+  lists to inspect its details, the stored decision and the current strictness threshold, or
+  open the actual video from the parent area. Available page text is shown honestly: a full
+  YouTube description may be unavailable. The same hide presets offered in setup are available
+  later in parent settings, alongside your custom rules.
 - **Screen time and bedtime.** An optional daily limit and bedtime. When time is up, YouTube
   is covered by a friendly "that's all for today" screen; the PIN can add 15 more minutes.
 - **Watch history.** A list for the parent of what was watched, with one tap to hide a video
@@ -54,8 +72,10 @@ is ever sent to the AI. SafeTube never sees any other traffic on the device.
    Sources** (for the Silk browser or your file manager).
 2. Download `SafeTube.apk` from this repository's **Releases** page (the "latest" release is
    rebuilt on every change) and open it.
-3. Open SafeTube. Setup takes about a minute: choose a parent PIN, tap what to hide
-   (scary stuff, pranks, violence, unboxing...), and optionally add a smart checker.
+3. Open SafeTube. Choose a parent PIN, tap what to hide (scary stuff, pranks, violence,
+   unboxing...), choose hide-matching or only-show content rules, and select Strict, Balanced
+   or Relaxed. Setup also offers AI context, a primary checker, a backup checker and outage
+   protection, as well as time limits and extras. Only-show rules require an AI checker.
 4. To get back to the parent settings later, **hold the YouTube logo in the top-left corner
    for three seconds**, or long-press the SafeTube app icon and choose **Parent settings**.
    Both ask for your PIN.

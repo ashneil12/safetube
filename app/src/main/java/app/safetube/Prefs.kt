@@ -18,6 +18,32 @@ class Prefs(context: Context) {
         get() = sp.getString("rules", DEFAULT_RULES) ?: DEFAULT_RULES
         set(v) = sp.edit().putString("rules", v).apply()
 
+    var allowedContent: String
+        get() = sp.getString("allowedContent", "") ?: ""
+        set(v) = sp.edit().putString("allowedContent", v).apply()
+    var exceptions: String
+        get() = sp.getString("exceptions", "") ?: ""
+        set(v) = sp.edit().putString("exceptions", v).apply()
+    var blockOnAiFailure: Boolean
+        get() = sp.getBoolean("blockOnAiFailure", true)
+        set(v) = sp.edit().putBoolean("blockOnAiFailure", v).apply()
+    var fallbackProvider: ProviderConfig
+        get() = runCatching {
+            val p = JSONObject(sp.getString("fallbackProvider", "{}") ?: "{}")
+            ProviderConfig(enumOr(p.optString("type"), ProviderType.NONE), p.optString("apiKey"),
+                p.optString("baseUrl"), p.optString("model"), p.optString("accountId"), p.optBoolean("sendThumbnails", true))
+        }.getOrDefault(ProviderConfig())
+        set(v) = sp.edit().putString("fallbackProvider", JSONObject()
+            .put("type", v.type.name).put("apiKey", v.apiKey).put("baseUrl", v.baseUrl)
+            .put("model", v.model).put("accountId", v.accountId).put("sendThumbnails", v.sendThumbnails).toString()).apply()
+
+    /** A checker outage survives relaunches, until fresh recovery or changed AI configuration. */
+    var aiUnavailable: Boolean
+        get() = blockOnAiFailure && sp.getBoolean("aiUnavailable", false) &&
+            sp.getString("aiUnavailableHash", "") == filterSettings().aiConfigHash()
+        set(v) = sp.edit().putBoolean("aiUnavailable", v)
+            .putString("aiUnavailableHash", filterSettings().aiConfigHash()).apply()
+
     var keywords: String
         get() = sp.getString("keywords", DEFAULT_KEYWORDS) ?: DEFAULT_KEYWORDS
         set(v) = sp.edit().putString("keywords", v).apply()
@@ -237,6 +263,10 @@ class Prefs(context: Context) {
 
     fun filterSettings() = FilterSettings(
         rules = rules,
+        allowedContent = allowedContent,
+        exceptions = exceptions,
+        fallbackProvider = fallbackProvider,
+        blockOnAiFailure = blockOnAiFailure,
         blockedKeywords = KeywordFilter.parseList(keywords),
         blockedChannels = blockedChannelList(),
         strictness = strictness,

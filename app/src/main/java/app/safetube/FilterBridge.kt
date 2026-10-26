@@ -40,8 +40,42 @@ class FilterBridge(
     /** Host of the page currently loaded, kept up to date by the activity. */
     @Volatile var currentHost: String = ""
 
+    private val stateLock = Any()
+    private var settingsVersion = -1
+    private var failureRevision = 0L
+    private var aiUnavailable = false
+    @Volatile private var pageGeneration = 0L
+
+    fun pageStarted() { pageGeneration++ }
+
+    private fun refreshSettings() = synchronized(stateLock) {
+        if (settingsVersion != prefs.version) {
+            settingsVersion = prefs.version
+            aiUnavailable = prefs.aiUnavailable
+            failureRevision++
+        }
+    }
+
     @JavascriptInterface
-    fun config(): String = prefs.pageConfigJson()
+    fun config(): String {
+        refreshSettings()
+        val settings = prefs.filterSettings()
+        val requiresAi = settings.allowedContent.isNotBlank() ||
+            (settings.provider.type != app.safetube.core.ProviderType.NONE && !settings.provider.isAiEnabled) ||
+            (settings.effectiveRules().isNotBlank() && (settings.provider.type != app.safetube.core.ProviderType.NONE || settings.fallbackProvider.type != app.safetube.core.ProviderType.NONE))
+        if (requiresAi && !settings.provider.isAiEnabled && !settings.fallbackProvider.isAiEnabled && settings.blockOnAiFailure) {
+            synchronized(stateLock) { aiUnavailable = true; prefs.aiUnavailable = true }
+        }
+        return JSONObject(prefs.pageConfigJson()).put("aiUnavailable", synchronized(stateLock) { aiUnavailable }).toString()
+    }
+
+    fun settingsChanged() { refreshSettings() }
+
+    fun reapplyAiLock() {
+        refreshSettings()
+        val locked = synchronized(stateLock) { aiUnavailable }
+        webView.evaluateJavascript("window.__safetube && window.__safetube.setAiUnavailable($locked)", null)
+    }
 
     @JavascriptInterface
     fun watched(json: String) {
@@ -69,23 +103,68 @@ class FilterBridge(
         if (!isYouTubeHost(currentHost)) return
         val videos = parse(json)
         if (videos.isEmpty()) return
+        refreshSettings()
+        val version = prefs.version
+        val generation = pageGeneration
         val settings = prefs.filterSettings()
+        val startFailure = synchronized(stateLock) { failureRevision }
+        val retry = synchronized(stateLock) { aiUnavailable }
         pool.execute {
+            var hadFailure = false
+            var hadFreshAi = false
             val send: (List<Decision>) -> Unit = { decisions ->
-                decisions.firstOrNull { it.source == DecisionSource.ERROR }?.let { onAiError(it.reason) }
-                prefs.recordChecked(decisions.count { it.verdict != Verdict.UNKNOWN })
-                val result = JSONObject()
-                decisions.forEach { result.put(it.id, it.verdict.wire) }
-                main.post {
-                    webView.evaluateJavascript("window.__safetube && window.__safetube.apply($result)", null)
+                synchronized(stateLock) {
+                    if (version == prefs.version && generation == pageGeneration) {
+                        hadFreshAi = hadFreshAi || decisions.any { it.freshAi }
+                        if (decisions.any { it.source == DecisionSource.ERROR }) {
+                            hadFailure = true
+                            if (settings.blockOnAiFailure) {
+                                aiUnavailable = true
+                                prefs.aiUnavailable = true
+                                failureRevision++
+                            }
+                        }
+                    }
+                }
+                if (version == prefs.version && generation == pageGeneration) {
+                    decisions.firstOrNull { it.source == DecisionSource.ERROR }?.let { onAiError(it.reason) }
+                    prefs.recordChecked(decisions.count { it.verdict != Verdict.UNKNOWN })
+                    val result = JSONObject()
+                    decisions.forEach { result.put(it.id, it.verdict.wire) }
+                    main.post {
+                        if (version == prefs.version && generation == pageGeneration) {
+                            reapplyAiLock()
+                            webView.evaluateJavascript("window.__safetube && window.__safetube.apply($result)", null)
+                        }
+                    }
                 }
             }
             try {
-                // Keyword and cached answers reach the page at once; AI answers follow batch by batch.
-                engine.decide(videos, settings, send)
+                // During an outage, retry fresh checks; cached/local allowances cannot restore access.
+                engine.decide(videos, settings, bypassCache = retry, emit = send)
             } catch (e: Exception) {
                 send(videos.map { Decision(it.id, Verdict.UNKNOWN, DecisionSource.ERROR, reason = e.toString()) })
             }
+            if (retry && !hadFailure && !hadFreshAi && version == prefs.version && generation == pageGeneration) {
+                hadFreshAi = engine.probeAiAvailability(videos, settings)
+                if (!hadFreshAi) {
+                    synchronized(stateLock) {
+                        if (version == prefs.version && generation == pageGeneration) {
+                            hadFailure = true
+                            aiUnavailable = true
+                            prefs.aiUnavailable = true
+                            failureRevision++
+                        }
+                    }
+                }
+            }
+            synchronized(stateLock) {
+                if (version == prefs.version && generation == pageGeneration && !hadFailure && hadFreshAi && failureRevision == startFailure) {
+                    aiUnavailable = false
+                    prefs.aiUnavailable = false
+                }
+            }
+            main.post { if (version == prefs.version && generation == pageGeneration) reapplyAiLock() }
         }
     }
 

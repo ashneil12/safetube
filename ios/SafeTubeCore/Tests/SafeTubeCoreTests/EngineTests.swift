@@ -256,8 +256,8 @@ final class PromptAndProviderTests: XCTestCase {
         XCTAssertEqual(scores[0].reason, "witches")
     }
 
-    func testClampsProbabilities() throws {
-        XCTAssertEqual(try PromptBuilder.parseScores(#"{"results":[{"id":"aaaaaaaaaaa","p":7}]}"#, expectedIds: ["aaaaaaaaaaa"]).first?.p, 1.0)
+    func testRejectsInvalidProbabilities() throws {
+        XCTAssertTrue(try PromptBuilder.parseScores(#"{"results":[{"id":"aaaaaaaaaaa","p":7}]}"#, expectedIds: ["aaaaaaaaaaa"]).isEmpty)
     }
 
     func testRejectsRepliesWithoutJson() {
@@ -310,5 +310,203 @@ final class PromptAndProviderTests: XCTestCase {
 
     func testJsBridgeQuoting() {
         XCTAssertEqual(JSON.quote("a\"b\u{2028}"), "\"a\\\"b\\u2028\"")
+    }
+}
+
+final class RecoveryAndRuleTests: XCTestCase {
+    let a = VideoInfo("aaaaaaaaaaa", "Planet Coaster park tour")
+    let b = VideoInfo("bbbbbbbbbbb", "Another video")
+    final class Stub: VideoClassifier {
+        var seen: [[String]] = []
+        let scores: [Score]
+        let fails: Bool
+        init(_ scores: [Score] = [], fails: Bool = false) { self.scores = scores; self.fails = fails }
+        func classify(_ videos: [VideoInfo], rules: String) throws -> [Score] {
+            seen.append(videos.map { $0.id })
+            if fails { throw ClassifierException("quota exhausted") }
+            return scores
+        }
+    }
+    func settings() -> FilterSettings {
+        FilterSettings(rules: "No violence", provider: ProviderConfig(.anthropic, apiKey: "primary"),
+            fallbackProvider: ProviderConfig(.jev, apiKey: "backup"))
+    }
+    func testFallbackRetriesOnlyMissingOrInvalidScores() {
+        let primary = Stub([Score(a.id, 0.01, "park tour"), Score(b.id, .infinity, "invalid")])
+        let backup = Stub([Score(b.id, 0.9, "violence")])
+        let engine = DecisionEngine(InMemoryVerdictStore(), classifierFactory: { $0.type == .anthropic ? primary : backup }, metadata: nil)
+        let result = engine.decide([a,b], settings())
+        XCTAssertEqual(result.map { $0.verdict }, [.allow, .block])
+        XCTAssertEqual(backup.seen, [[b.id]])
+        XCTAssertTrue(result.allSatisfy { $0.freshAi })
+    }
+    func testFallbackIsNotSecondOpinionForValidBlock() {
+        let primary = Stub([Score(a.id, 0.9, "violence")])
+        let backup = Stub([Score(a.id, 0.0, "fine")])
+        let result = DecisionEngine(InMemoryVerdictStore(), classifierFactory: { $0.type == .anthropic ? primary : backup }, metadata: nil).decide([a], settings())
+        XCTAssertEqual(result.first?.verdict, .block)
+        XCTAssertTrue(backup.seen.isEmpty)
+    }
+    func testBothFailuresStayUnknown() {
+        let fail = Stub(fails: true)
+        let result = DecisionEngine(InMemoryVerdictStore(), classifierFactory: { _ in fail }, metadata: nil).decide([a], settings())
+        XCTAssertEqual(result.first?.verdict, .unknown)
+        XCTAssertFalse(result.first?.freshAi ?? true)
+    }
+    func testOnlyShowRequiresAiEvenWithNoProvider() {
+        let result = DecisionEngine(InMemoryVerdictStore(), metadata: nil).decide([a], FilterSettings(allowedContent: "Planet Coaster"))
+        XCTAssertEqual(result.first?.source, .error)
+        XCTAssertEqual(result.first?.verdict, .unknown)
+    }
+    func testMisconfiguredSelectedProviderDoesNotAllowVideos() {
+        let result = DecisionEngine(InMemoryVerdictStore(), metadata: nil).decide([a], FilterSettings(provider: ProviderConfig(.anthropic)))
+        XCTAssertEqual(result.first?.verdict, .unknown)
+    }
+    func testCacheIsNotRecoveryAndForcedRetryUsesAi() {
+        let primary = Stub([Score(a.id, 0.01, "park tour")])
+        let engine = DecisionEngine(InMemoryVerdictStore(), classifierFactory: { _ in primary }, metadata: nil)
+        XCTAssertEqual(engine.decide([a], settings()).first?.freshAi, true)
+        XCTAssertEqual(engine.decide([a], settings()).first?.freshAi, false)
+        XCTAssertEqual(engine.decide([a], settings(), forceFresh: true).first?.freshAi, true)
+        XCTAssertEqual(primary.seen.count, 2)
+    }
+    func testRuleContextAndFallbackIdentityInvalidateCacheButThresholdDoesNot() {
+        let original = settings()
+        var changed = original
+        changed.strictness = .balanced
+        XCTAssertEqual(original.aiConfigHash(), changed.aiConfigHash())
+        changed.allowedContent = "Planet Coaster"
+        XCTAssertNotEqual(original.aiConfigHash(), changed.aiConfigHash())
+        changed = original; changed.exceptions = "Theme park games are fine"
+        XCTAssertNotEqual(original.aiConfigHash(), changed.aiConfigHash())
+        changed = original; changed.fallbackProvider.apiKey = "another"
+        XCTAssertNotEqual(original.aiConfigHash(), changed.aiConfigHash())
+        changed = original; changed.provider.accountId = "another"
+        XCTAssertNotEqual(original.aiConfigHash(), changed.aiConfigHash())
+    }
+    func testExceptionsNeverBypassKeywordOrManualBlock() {
+        let store = InMemoryVerdictStore()
+        var s = settings(); s.exceptions = "Everything is fine"; s.blockedKeywords = ["coaster"]
+        let fake = Stub([Score(a.id, 0, "fine")])
+        let engine = DecisionEngine(store, classifierFactory: { _ in fake }, metadata: nil)
+        XCTAssertEqual(engine.decide([a], s).first?.source, .keyword)
+        s.blockedKeywords = []; store.setOverride(a.id, .block)
+        XCTAssertEqual(engine.decide([a], s).first?.source, .parent)
+        XCTAssertTrue(fake.seen.isEmpty)
+    }
+}
+
+final class AiConfigurationProtectionTests: XCTestCase {
+    func testOnlyShowWithNoUsableCheckerPrelocksEvenIfVideoHasParentAllowance() {
+        let settings = FilterSettings(allowedContent: "Planet Coaster")
+        let store = InMemoryVerdictStore()
+        store.setOverride("aaaaaaaaaaa", .allow)
+        XCTAssertEqual(DecisionEngine(store, metadata: nil).decide([VideoInfo("aaaaaaaaaaa")], settings).first?.verdict, .allow)
+        XCTAssertTrue(settings.mustBlockForAiConfiguration)
+    }
+    func testSelectedInvalidPrimaryPrelocksWithEmptyRules() {
+        XCTAssertTrue(FilterSettings(provider: ProviderConfig(.anthropic)).mustBlockForAiConfiguration)
+    }
+    func testUsableFallbackAllowsFreshRetryWithoutPrelock() {
+        let settings = FilterSettings(provider: ProviderConfig(.anthropic), allowedContent: "Planet Coaster",
+            fallbackProvider: ProviderConfig(.jev, apiKey: "backup"))
+        XCTAssertFalse(settings.mustBlockForAiConfiguration)
+    }
+    func testKeywordOnlyAndParentOptOutDoNotPrelock() {
+        XCTAssertFalse(FilterSettings(blockedKeywords: ["violence"]).mustBlockForAiConfiguration)
+        XCTAssertFalse(FilterSettings(allowedContent: "Planet Coaster", blockOnAiFailure: false).mustBlockForAiConfiguration)
+    }
+}
+
+final class AvailabilityProbeTests: XCTestCase {
+    let video = VideoInfo("aaaaaaaaaaa", "Planet Coaster park tour", "Park videos")
+    var settings: FilterSettings {
+        FilterSettings(rules: "No violence", blockedKeywords: ["coaster"], blockedChannels: ["Park videos"],
+            provider: ProviderConfig(.anthropic, apiKey: "test"))
+    }
+    func testProbeChecksAiButPreservesManualAndKeywordDecisionsAndCache() {
+        let store = InMemoryVerdictStore()
+        store.setOverride(video.id, .block)
+        let fake = RecoveryAndRuleTests.Stub([Score(video.id, 0.01, "park tour")])
+        let engine = DecisionEngine(store, classifierFactory: { _ in fake }, metadata: nil)
+        XCTAssertTrue(engine.probeAiAvailability([video], settings))
+        XCTAssertEqual(fake.seen, [[video.id]])
+        XCTAssertEqual(engine.decide([video], settings).first?.source, .parent)
+        XCTAssertNil(store.cachedScore(video.id, configHash: settings.aiConfigHash()))
+        store.setOverride(video.id, nil)
+        XCTAssertEqual(engine.decide([video], settings).first?.source, .channel)
+    }
+    func testProbeCannotSucceedWithoutRealTitleOrWithAiFailure() {
+        let fake = RecoveryAndRuleTests.Stub(fails: true)
+        let engine = DecisionEngine(InMemoryVerdictStore(), classifierFactory: { _ in fake }, metadata: nil)
+        XCTAssertFalse(engine.probeAiAvailability([VideoInfo(video.id)], settings))
+        XCTAssertTrue(fake.seen.isEmpty)
+        XCTAssertFalse(engine.probeAiAvailability([video], settings))
+    }
+    func testProbeCanUseRealMetadataAndFallbackWithoutSavingScore() {
+        let fail = RecoveryAndRuleTests.Stub(fails: true)
+        let backup = RecoveryAndRuleTests.Stub([Score(video.id, 0.8, "rule match")])
+        var config = settings
+        config.fallbackProvider = ProviderConfig(.jev, apiKey: "backup")
+        let info = video
+        let engine = DecisionEngine(InMemoryVerdictStore(), classifierFactory: { $0.type == .jev ? backup : fail },
+            metadata: MetadataLookup { _ in info })
+        XCTAssertTrue(engine.probeAiAvailability([VideoInfo(video.id)], config))
+        XCTAssertEqual(backup.seen, [[video.id]])
+    }
+}
+
+final class MissingTitleProtectionTests: XCTestCase {
+    let video = VideoInfo("aaaaaaaaaaa")
+    func testPrimaryClefAndDisabledFallbackCannotCheckMissingTitle() {
+        let fake = RecoveryAndRuleTests.Stub([Score(video.id, 0, "no evidence")])
+        let config = FilterSettings(rules: "No violence",
+            provider: ProviderConfig(.clef, apiKey: "test", accountId: "account"))
+        let result = DecisionEngine(InMemoryVerdictStore(), classifierFactory: { _ in fake }, metadata: nil).decide([video], config)
+        XCTAssertEqual(result.first?.verdict, .unknown)
+        XCTAssertEqual(result.first?.source, .error)
+        XCTAssertTrue(fake.seen.isEmpty)
+    }
+    func testFallbackOnlyClefAndDisabledPrimaryCannotCheckMissingTitle() {
+        let fake = RecoveryAndRuleTests.Stub([Score(video.id, 0, "no evidence")])
+        let config = FilterSettings(allowedContent: "Planet Coaster",
+            fallbackProvider: ProviderConfig(.clef, apiKey: "test", accountId: "account"))
+        let result = DecisionEngine(InMemoryVerdictStore(), classifierFactory: { _ in fake }, metadata: nil).decide([video], config)
+        XCTAssertEqual(result.first?.verdict, .unknown)
+        XCTAssertEqual(result.first?.source, .error)
+        XCTAssertTrue(fake.seen.isEmpty)
+    }
+    func testEnabledVisionProviderCanCheckThumbnailWithoutTitle() {
+        let fake = RecoveryAndRuleTests.Stub([Score(video.id, 0.1, "park thumbnail")])
+        let config = FilterSettings(rules: "No violence", provider: ProviderConfig(.anthropic, apiKey: "test"))
+        let result = DecisionEngine(InMemoryVerdictStore(), classifierFactory: { _ in fake }, metadata: nil).decide([video], config)
+        XCTAssertEqual(result.first?.verdict, .allow)
+        XCTAssertEqual(result.first?.freshAi, true)
+        XCTAssertEqual(fake.seen, [[video.id]])
+    }
+}
+
+extension MissingTitleProtectionTests {
+    func testTitlelessVisionFailureCannotFallBackToDecisionOnlyClassifier() {
+        let primary = RecoveryAndRuleTests.Stub(fails: true)
+        let backup = RecoveryAndRuleTests.Stub([Score(video.id, 0, "no evidence")])
+        let config = FilterSettings(rules: "No violence", provider: ProviderConfig(.anthropic, apiKey: "primary"),
+            fallbackProvider: ProviderConfig(.clef, apiKey: "backup", accountId: "account"))
+        let result = DecisionEngine(InMemoryVerdictStore(), classifierFactory: { $0.type == .anthropic ? primary : backup }, metadata: nil).decide([video], config)
+        XCTAssertEqual(result.first?.verdict, .unknown)
+        XCTAssertEqual(result.first?.source, .error)
+        XCTAssertEqual(primary.seen, [[video.id]])
+        XCTAssertTrue(backup.seen.isEmpty)
+    }
+    func testTitlelessDecisionPrimaryIsSkippedForVisionFallback() {
+        let primary = RecoveryAndRuleTests.Stub([Score(video.id, 0, "no evidence")])
+        let backup = RecoveryAndRuleTests.Stub([Score(video.id, 0.1, "park thumbnail")])
+        let config = FilterSettings(rules: "No violence", provider: ProviderConfig(.clef, apiKey: "primary", accountId: "account"),
+            fallbackProvider: ProviderConfig(.anthropic, apiKey: "backup"))
+        let result = DecisionEngine(InMemoryVerdictStore(), classifierFactory: { $0.type == .clef ? primary : backup }, metadata: nil).decide([video], config)
+        XCTAssertEqual(result.first?.verdict, .allow)
+        XCTAssertEqual(result.first?.freshAi, true)
+        XCTAssertTrue(primary.seen.isEmpty)
+        XCTAssertEqual(backup.seen, [[video.id]])
     }
 }

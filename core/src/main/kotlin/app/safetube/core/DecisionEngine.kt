@@ -22,10 +22,28 @@ class DecisionEngine(
     private val batchSize: Int = 12,
     private val aiPool: ExecutorService? = null,
 ) {
-    fun decide(input: List<VideoInfo>, settings: FilterSettings): List<Decision> {
+    fun decide(input: List<VideoInfo>, settings: FilterSettings, bypassCache: Boolean = false): List<Decision> {
         val all = LinkedHashMap<String, Decision>()
-        decide(input, settings) { part -> synchronized(all) { part.forEach { all[it.id] = it } } }
+        decide(input, settings, bypassCache) { part -> synchronized(all) { part.forEach { all[it.id] = it } } }
         return input.distinctBy { it.id }.mapNotNull { all[it.id] }
+    }
+
+    /**
+     * Checks recovery when every visible video has a local decision. The probe uses a real
+     * video's metadata and the saved AI policy, but never changes local overrides or emits
+     * its classification to the page. An empty/failed response cannot restore access.
+     */
+    fun probeAiAvailability(input: List<VideoInfo>, settings: FilterSettings): Boolean {
+        val valid = input.filter { VideoInfo.isValidId(it.id) }
+        val video = valid.firstOrNull { it.title.isNotBlank() } ?: valid.firstOrNull()?.let { raw ->
+            try { metadata?.fetch(raw.id)?.mergeInto(raw) } catch (e: Exception) { null }
+        } ?: return false
+        if (video.title.isBlank()) return false
+        return try {
+            DecisionEngine(InMemoryVerdictStore(), classifierFactory, metadata = null)
+                .decide(listOf(video), settings.copy(blockedKeywords = emptyList(), blockedChannels = emptyList()), bypassCache = true)
+                .singleOrNull()?.let { it.freshAi && it.source == DecisionSource.AI } == true
+        } catch (e: Exception) { false }
     }
 
     /**
@@ -33,12 +51,14 @@ class DecisionEngine(
      * no AI first, then each AI batch as it comes back. Returns once every video has been sent.
      * [emit] may be called from several threads at once when [aiPool] is set.
      */
-    fun decide(input: List<VideoInfo>, settings: FilterSettings, emit: (List<Decision>) -> Unit) {
+    fun decide(input: List<VideoInfo>, settings: FilterSettings, bypassCache: Boolean = false, emit: (List<Decision>) -> Unit) {
         val videos = input.filter { VideoInfo.isValidId(it.id) }.distinctBy { it.id }
         val decisions = LinkedHashMap<String, Decision>()
         val keywords = KeywordFilter(settings.blockedKeywords)
         val channels = ChannelBlocklist(settings.blockedChannels)
-        val aiOn = settings.provider.isAiEnabled && settings.rules.isNotBlank()
+        val aiOn = settings.allowedContent.isNotBlank() ||
+            (settings.effectiveRules().isNotBlank() && (settings.provider.type != ProviderType.NONE || settings.fallbackProvider.type != ProviderType.NONE)) ||
+            (settings.provider.type != ProviderType.NONE && !settings.provider.isAiEnabled)
         val hash = settings.aiConfigHash()
         val needAi = ArrayList<VideoInfo>()
         val byId = HashMap<String, VideoInfo>()
@@ -68,12 +88,17 @@ class DecisionEngine(
                 decisions[v.id] = Decision(v.id, Verdict.ALLOW, DecisionSource.NO_RULES)
                 continue
             }
-            val cached = store.cachedScore(v.id, hash)
+            if (!settings.provider.isAiEnabled && !settings.fallbackProvider.isAiEnabled) {
+                decisions[v.id] = Decision(v.id, Verdict.UNKNOWN, DecisionSource.ERROR, reason = "AI rules require a configured checker")
+                continue
+            }
+            val cached = if (bypassCache) null else store.cachedScore(v.id, hash)
             if (cached != null) {
                 decisions[v.id] = fromScore(cached, settings.strictness)
                 continue
             }
-            if (v.title.isBlank() && !settings.provider.usesThumbnails) {
+            if (v.title.isBlank() && !(settings.provider.isAiEnabled && settings.provider.usesThumbnails) &&
+                !(settings.fallbackProvider.isAiEnabled && settings.fallbackProvider.usesThumbnails)) {
                 decisions[v.id] = Decision(v.id, Verdict.UNKNOWN, DecisionSource.ERROR, reason = "No title to check")
                 continue
             }
@@ -94,7 +119,7 @@ class DecisionEngine(
         send(videos, decisions)
         if (needAi.isEmpty()) return
 
-        val classifier = classifierFactory(settings.provider)
+        val classifier = try { if (settings.provider.isAiEnabled) classifierFactory(settings.provider) else null } catch (e: Exception) { null }
         val batches = needAi.chunked(batchSize)
         fun run(batch: List<VideoInfo>) = send(batch, classifyBatch(classifier, batch, settings, hash))
         if (aiPool == null || batches.size == 1) {
@@ -120,19 +145,35 @@ class DecisionEngine(
         settings: FilterSettings,
         hash: String,
     ): Map<String, Decision> {
-        val scores = try {
-            classifier?.classify(batch, settings.rules) ?: throw ClassifierException("No AI provider configured")
-        } catch (e: ClassifierException) {
-            return batch.associate { it.id to Decision(it.id, Verdict.UNKNOWN, DecisionSource.ERROR, reason = e.message ?: "AI error") }
+        var failure = "AI skipped this video or returned an invalid score"
+        fun attempt(checker: VideoClassifier?, config: ProviderConfig, videos: List<VideoInfo>): Map<String, Score> {
+            val eligible = videos.filter { it.title.isNotBlank() || (config.isAiEnabled && config.usesThumbnails) }
+            if (eligible.isEmpty()) {
+                failure = "No title to check with this provider"
+                return emptyMap()
+            }
+            return try {
+                checker?.classify(eligible, settings.effectiveRules()).orEmpty()
+                    .filter { it.p.isFinite() && it.p in 0.0..1.0 && eligible.any { v -> v.id == it.id } }
+                    .associateBy { it.id }
+            } catch (e: Exception) {
+                failure = e.message ?: "AI error"
+                emptyMap()
+            }
         }
-        val got = scores.associateBy { it.id }
+        val got = attempt(classifier, settings.provider, batch).toMutableMap()
+        val missing = batch.filter { it.id !in got }
+        if (missing.isNotEmpty() && settings.fallbackProvider.isAiEnabled) {
+            val fallback = try { classifierFactory(settings.fallbackProvider) } catch (e: Exception) { null }
+            got.putAll(attempt(fallback, settings.fallbackProvider, missing))
+        }
         return batch.associate { v ->
-            val s = got[v.id]
-            v.id to if (s == null) {
-                Decision(v.id, Verdict.UNKNOWN, DecisionSource.ERROR, reason = "AI skipped this video")
+            val score = got[v.id]
+            v.id to if (score == null) {
+                Decision(v.id, Verdict.UNKNOWN, DecisionSource.ERROR, reason = failure)
             } else {
-                store.saveScore(s, hash, v)
-                fromScore(s, settings.strictness)
+                store.saveScore(score, hash, v)
+                fromScore(score, settings.strictness).copy(freshAi = true)
             }
         }
     }

@@ -32,6 +32,12 @@ final class MainViewController: UIViewController, WKNavigationDelegate, WKUIDele
     private let cover = UIView()
     private var filterScript = ""
     private var seenVersion = -1
+    private var aiUnavailable: Bool {
+        get { prefs.aiUnavailable }
+        set { prefs.aiUnavailable = newValue }
+    }
+    private var pageGeneration = 0
+    private var aiFailureRevision = 0
     private var lastErrorToast: Date?
     private var shownSetup = false
     /// Set when the Home Screen quick action asked for the parent settings before the view was ready.
@@ -184,7 +190,7 @@ final class MainViewController: UIViewController, WKNavigationDelegate, WKUIDele
             (function () {
               var h = String(location.hostname || '').toLowerCase();
               if (!(h === 'youtube.com' || h.slice(-12) === '.youtube.com')) return;
-              var cfg = \(JSON.quote(prefs.pageConfigJson()));
+              var cfg = \(JSON.quote(prefs.pageConfigJson(aiUnavailable: aiUnavailable)));
               function post(m) {
                 try { window.webkit.messageHandlers.safetube.postMessage(m); } catch (e) {}
               }
@@ -251,21 +257,40 @@ final class MainViewController: UIViewController, WKNavigationDelegate, WKUIDele
         let videos = MainViewController.parseVideos(json)
         if videos.isEmpty { return }
         let settings = prefs.filterSettings()
+        let version = prefs.version
+        let failureRevision = aiFailureRevision
+        let forceFresh = aiUnavailable
+        let generation = pageGeneration
         let engine = self.engine
-        let prefs = self.prefs
         bridgeQueue.addOperation { [weak self] in
-            let send: ([Decision]) -> Void = { decisions in
-                if let err = decisions.first(where: { $0.source == .error }) {
-                    DispatchQueue.main.async { self?.showAiError(err.reason) }
+            let deliver: ([Decision], Bool, Bool) -> Void = { decisions, recoveredByProbe, failedProbe in
+                DispatchQueue.main.async {
+                    guard let self = self, self.prefs.version == version, self.pageGeneration == generation else { return }
+                    let wasUnavailable = self.aiUnavailable
+                    let errors = decisions.filter { $0.source == .error }
+                    if settings.blockOnAiFailure && (!errors.isEmpty || failedProbe) {
+                        self.aiFailureRevision += 1
+                        self.aiUnavailable = true
+                        self.showAiError(errors.first?.reason ?? "AI retry could not verify the checker. Check the connection or backup provider.")
+                    } else if forceFresh && self.aiFailureRevision == failureRevision && (recoveredByProbe || decisions.contains(where: { $0.freshAi })) {
+                        self.aiUnavailable = false
+                    }
+                    if wasUnavailable != self.aiUnavailable { self.installScripts(self.webView.configuration.userContentController) }
+                    self.prefs.recordChecked(decisions.filter { $0.verdict != .unknown }.count)
+                    var result: [String: Any] = [:]
+                    for d in decisions { result[d.id] = d.verdict.wire }
+                    let js = "window.__safetube && (window.__safetube.setAiUnavailable(\(self.aiUnavailable)), window.__safetube.apply(\(JSON.string(result))))"
+                    self.webView?.evaluateJavaScript(js, completionHandler: nil)
                 }
-                prefs.recordChecked(decisions.filter { $0.verdict != .unknown }.count)
-                var result: [String: Any] = [:]
-                for d in decisions { result[d.id] = d.verdict.wire }
-                let js = "window.__safetube && window.__safetube.apply(\(JSON.string(result)))"
-                DispatchQueue.main.async { self?.webView?.evaluateJavaScript(js, completionHandler: nil) }
             }
-            // Keyword and cached answers reach the page at once; AI answers follow batch by batch.
-            engine.decide(videos, settings, emit: send)
+            if forceFresh {
+                let decisions = engine.decide(videos, settings, forceFresh: true)
+                let needsProbe = !decisions.contains(where: { $0.source == .error || $0.freshAi })
+                let recovered = needsProbe && engine.probeAiAvailability(videos, settings)
+                deliver(decisions, recovered, needsProbe && !recovered)
+            } else {
+                engine.decide(videos, settings) { deliver($0, false, false) }
+            }
         }
     }
 
@@ -306,15 +331,16 @@ final class MainViewController: UIViewController, WKNavigationDelegate, WKUIDele
     private func applySettingsIfChanged(force: Bool = false) {
         guard force || prefs.version != seenVersion else { return }
         seenVersion = prefs.version
+        pageGeneration += 1
         installScripts(webView.configuration.userContentController)
         applyAdBlocking()
-        let config = prefs.pageConfigJson()
+        let config = prefs.pageConfigJson(aiUnavailable: aiUnavailable)
         applyRestrictedMode { [weak self] changed in
             guard let self = self else { return }
             if changed {
                 self.webView.reload()
             } else {
-                self.webView.evaluateJavaScript("window.__safetube && window.__safetube.reset(\(config))", completionHandler: nil)
+                self.webView.evaluateJavaScript("window.__safetube && (window.__safetube.reset(\(config)), window.__safetube.setAiUnavailable(\(self.aiUnavailable)))", completionHandler: nil)
             }
         }
     }
@@ -488,7 +514,12 @@ final class MainViewController: UIViewController, WKNavigationDelegate, WKUIDele
         return nil
     }
 
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { cover.isHidden = true }
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) { pageGeneration += 1 }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        cover.isHidden = true
+        webView.evaluateJavaScript("window.__safetube && window.__safetube.setAiUnavailable(\(aiUnavailable))", completionHandler: nil)
+    }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { cover.isHidden = true }
 

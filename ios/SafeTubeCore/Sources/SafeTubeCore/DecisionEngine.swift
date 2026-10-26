@@ -35,10 +35,10 @@ public final class DecisionEngine {
     }
 
     /// Every decision at once, in input order.
-    public func decide(_ input: [VideoInfo], _ settings: FilterSettings) -> [Decision] {
+    public func decide(_ input: [VideoInfo], _ settings: FilterSettings, forceFresh: Bool = false) -> [Decision] {
         let lock = NSLock()
         var all: [String: Decision] = [:]
-        decide(input, settings) { part in
+        decide(input, settings, forceFresh: forceFresh) { part in
             lock.lock()
             for d in part { all[d.id] = d }
             lock.unlock()
@@ -47,16 +47,37 @@ public final class DecisionEngine {
         return input.filter { seen.insert($0.id).inserted }.compactMap { all[$0.id] }
     }
 
+    /// Verify checker recovery using a real submitted video without changing its local verdict.
+    /// The isolated store prevents parent overrides and cached scores from faking a successful check.
+    public func probeAiAvailability(_ input: [VideoInfo], _ settings: FilterSettings) -> Bool {
+        let valid = input.filter { VideoInfo.isValidId($0.id) }
+        let video: VideoInfo?
+        if let titled = valid.first(where: { !$0.title.isBlank }) {
+            video = titled
+        } else if let raw = valid.first, let looked = metadata?.fetch(raw.id) {
+            video = DecisionEngine.merge(looked, into: raw)
+        } else {
+            video = nil
+        }
+        guard let candidate = video, !candidate.title.isBlank else { return false }
+        var probeSettings = settings
+        probeSettings.blockedKeywords = []
+        probeSettings.blockedChannels = []
+        let isolated = DecisionEngine(InMemoryVerdictStore(), classifierFactory: classifierFactory, metadata: nil)
+        let result = isolated.decide([candidate], probeSettings, forceFresh: true)
+        return result.count == 1 && result[0].freshAi && result[0].source == .ai
+    }
+
     /// Same as the other decide(), but hands results over as soon as they're known: everything that
     /// needs no AI first, then each AI batch as it comes back. Returns once every video has been sent.
     /// `emit` may be called from several threads at once when `aiPool` is set.
-    public func decide(_ input: [VideoInfo], _ settings: FilterSettings, emit: @escaping ([Decision]) -> Void) {
+    public func decide(_ input: [VideoInfo], _ settings: FilterSettings, forceFresh: Bool = false, emit: @escaping ([Decision]) -> Void) {
         var seenIds = Set<String>()
         let videos = input.filter { VideoInfo.isValidId($0.id) && seenIds.insert($0.id).inserted }
         var decisions: [String: Decision] = [:]
         let keywords = KeywordFilter(settings.blockedKeywords)
         let channels = ChannelBlocklist(settings.blockedChannels)
-        let aiOn = settings.provider.isAiEnabled && !settings.rules.isBlank
+        let aiOn = settings.requiresAi
         let hash = settings.aiConfigHash()
         var needAi: [VideoInfo] = []
         var byId: [String: VideoInfo] = [:]
@@ -83,11 +104,13 @@ public final class DecisionEngine {
                 decisions[v.id] = Decision(v.id, .allow, .noRules)
                 continue
             }
-            if let cached = store.cachedScore(v.id, configHash: hash) {
+            if !forceFresh, let cached = store.cachedScore(v.id, configHash: hash) {
                 decisions[v.id] = fromScore(cached, settings.strictness)
                 continue
             }
-            if v.title.isBlank && !settings.provider.usesThumbnails {
+            let canCheckThumbnail = (settings.provider.isAiEnabled && settings.provider.usesThumbnails) ||
+                (settings.fallbackProvider.isAiEnabled && settings.fallbackProvider.usesThumbnails)
+            if v.title.isBlank && !canCheckThumbnail {
                 decisions[v.id] = Decision(v.id, .unknown, .error, reason: "No title to check")
                 continue
             }
@@ -143,32 +166,44 @@ public final class DecisionEngine {
 
     private func classifyBatch(_ classifier: VideoClassifier?, _ batch: [VideoInfo], _ settings: FilterSettings,
                                _ hash: String) -> [String: Decision] {
-        let scores: [Score]
-        do {
-            guard let c = classifier else { throw ClassifierException("No AI provider configured") }
-            scores = try c.classify(batch, rules: settings.rules)
-        } catch {
-            let reason = (error as? ClassifierException)?.message ?? "\(error)"
-            var out: [String: Decision] = [:]
-            for v in batch { out[v.id] = Decision(v.id, .unknown, .error, reason: reason.isEmpty ? "AI error" : reason) }
-            return out
-        }
         var got: [String: Score] = [:]
-        for s in scores { got[s.id] = s }
+        var failure = "No valid AI score returned"
+        func attempt(_ config: ProviderConfig, _ candidate: VideoClassifier?, _ pending: [VideoInfo]) {
+            guard !pending.isEmpty else { return }
+            do {
+                guard config.isAiEnabled, let c = candidate else {
+                    throw ClassifierException("AI provider is missing or misconfigured")
+                }
+                let eligible = pending.filter { !$0.title.isBlank || config.usesThumbnails }
+                guard !eligible.isEmpty else {
+                    failure = "No title to check with this provider"
+                    return
+                }
+                let wanted = Set(eligible.map { $0.id })
+                for score in try c.classify(eligible, rules: settings.effectiveRules()) {
+                    if wanted.contains(score.id), score.p.isFinite, (0...1).contains(score.p) { got[score.id] = score }
+                }
+            } catch { failure = (error as? ClassifierException)?.message ?? error.localizedDescription }
+        }
+        attempt(settings.provider, classifier, batch)
+        let missing = batch.filter { got[$0.id] == nil }
+        if !missing.isEmpty, settings.fallbackProvider.type != .none {
+            attempt(settings.fallbackProvider, classifierFactory(settings.fallbackProvider), missing)
+        }
         var out: [String: Decision] = [:]
         for v in batch {
-            if let s = got[v.id] {
-                store.saveScore(s, configHash: hash, video: v)
-                out[v.id] = fromScore(s, settings.strictness)
+            if let score = got[v.id] {
+                store.saveScore(score, configHash: hash, video: v)
+                out[v.id] = fromScore(score, settings.strictness, freshAi: true)
             } else {
-                out[v.id] = Decision(v.id, .unknown, .error, reason: "AI skipped this video")
+                out[v.id] = Decision(v.id, .unknown, .error, reason: failure)
             }
         }
         return out
     }
 
-    private func fromScore(_ s: Score, _ strictness: Strictness) -> Decision {
-        Decision(s.id, strictness.verdictFor(s.p), .ai, score: s.p, reason: s.reason)
+    private func fromScore(_ s: Score, _ strictness: Strictness, freshAi: Bool = false) -> Decision {
+        Decision(s.id, strictness.verdictFor(s.p), .ai, score: s.p, reason: s.reason, freshAi: freshAi)
     }
 
     /// Fills the gaps in what the page showed with what oEmbed said.

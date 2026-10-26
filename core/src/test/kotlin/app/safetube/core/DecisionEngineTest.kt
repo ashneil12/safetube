@@ -148,4 +148,192 @@ class DecisionEngineTest {
         assertEquals(4, parts.size)
         assertEquals(25, parts.flatten().map { it.id }.toSet().size)
     }
+    @Test
+    fun `only show rules and exceptions reach classifier even without hide rules`() {
+        var received = ""
+        val fake = object : VideoClassifier {
+            override fun classify(videos: List<VideoInfo>, rules: String): List<Score> {
+                received = rules
+                return videos.map { Score(it.id, 0.9, "Outside allowed topics") }
+            }
+        }
+        val settings = aiSettings.copy(rules = "", allowedContent = "Planet Coaster", exceptions = "Ordinary rides are fine")
+        assertEquals(Verdict.BLOCK, engine(InMemoryVerdictStore(), fake).decide(listOf(bus), settings).single().verdict)
+        assertTrue(received.contains("ONLY SHOW"))
+        assertTrue(received.contains("Ordinary rides are fine"))
+    }
+
+    @Test
+    fun `only show with no configured AI fails closed`() {
+        val d = engine(InMemoryVerdictStore(), null).decide(listOf(bus), FilterSettings(allowedContent = "Education"))
+        assertEquals(DecisionSource.ERROR, d.single().source)
+        assertEquals(Verdict.UNKNOWN, d.single().verdict)
+    }
+
+    @Test
+    fun `selected invalid checker does not degrade to no rules allowance`() {
+        val d = engine(InMemoryVerdictStore(), null).decide(listOf(bus), aiSettings.copy(rules = "", provider = ProviderConfig(ProviderType.ANTHROPIC)))
+        assertEquals(Verdict.UNKNOWN, d.single().verdict)
+    }
+
+    @Test
+    fun `fallback checks only missing and invalid primary results`() {
+        val fallbackSeen = mutableListOf<String>()
+        val primary = object : VideoClassifier {
+            override fun classify(videos: List<VideoInfo>, rules: String) = listOf(Score(bus.id, 0.01, "Valid"), Score(potion.id, Double.NaN, "Bad"))
+        }
+        val fallback = object : VideoClassifier {
+            override fun classify(videos: List<VideoInfo>, rules: String): List<Score> {
+                fallbackSeen += videos.map { it.id }
+                return videos.map { Score(it.id, 0.8, "Fallback evidence") }
+            }
+        }
+        val settings = aiSettings.copy(fallbackProvider = ProviderConfig(ProviderType.JEV, apiKey = "fallback"))
+        val decisions = DecisionEngine(InMemoryVerdictStore(), { if (it.type == ProviderType.JEV) fallback else primary }, null)
+            .decide(listOf(bus, potion, pumpkins), settings)
+        assertEquals(listOf(potion.id, pumpkins.id), fallbackSeen)
+        assertEquals(listOf(Verdict.ALLOW, Verdict.BLOCK, Verdict.BLOCK), decisions.map { it.verdict })
+        assertTrue(decisions.all { it.freshAi })
+    }
+
+    @Test
+    fun `fallback recovers primary error and still fails closed when both fail`() {
+        val failing = object : VideoClassifier {
+            override fun classify(videos: List<VideoInfo>, rules: String): List<Score> = throw ClassifierException("quota exhausted")
+        }
+        val settings = aiSettings.copy(fallbackProvider = ProviderConfig(ProviderType.JEV, apiKey = "fallback"))
+        val recovered = DecisionEngine(InMemoryVerdictStore(), { if (it.type == ProviderType.JEV) FakeClassifier(mapOf(bus.id to 0.0)) else failing }, null)
+            .decide(listOf(bus), settings).single()
+        assertTrue(recovered.freshAi)
+        assertEquals(Verdict.ALLOW, recovered.verdict)
+        val failed = engine(InMemoryVerdictStore(), failing).decide(listOf(bus), settings).single()
+        assertEquals(Verdict.UNKNOWN, failed.verdict)
+    }
+
+    @Test
+    fun `cache does not count as fresh success and explicit retry bypasses cache`() {
+        val store = InMemoryVerdictStore()
+        val fake = FakeClassifier(mapOf(bus.id to 0.0))
+        val checker = engine(store, fake)
+        assertTrue(checker.decide(listOf(bus), aiSettings).single().freshAi)
+        assertTrue(!checker.decide(listOf(bus), aiSettings).single().freshAi)
+        assertTrue(checker.decide(listOf(bus), aiSettings, bypassCache = true).single().freshAi)
+        assertEquals(2, fake.calls)
+    }
+
+    @Test
+    fun `rule clarification and both provider identities invalidate scores`() {
+        val baseline = aiSettings.aiConfigHash()
+        assertTrue(baseline != aiSettings.copy(allowedContent = "Planet Coaster").aiConfigHash())
+        assertTrue(baseline != aiSettings.copy(exceptions = "Normal games are fine").aiConfigHash())
+        assertTrue(baseline != aiSettings.copy(provider = aiSettings.provider.copy(apiKey = "new key")).aiConfigHash())
+        assertTrue(baseline != aiSettings.copy(fallbackProvider = ProviderConfig(ProviderType.JEV, apiKey = "fallback")).aiConfigHash())
+        assertEquals(baseline, aiSettings.copy(strictness = Strictness.BALANCED).aiConfigHash())
+    }
+
+    @Test
+    fun `clarification cannot bypass keyword or channel block`() {
+        val settings = aiSettings.copy(exceptions = "Everything here is fine", blockedKeywords = listOf("bus"), blockedChannels = listOf("Super Simple Songs"))
+        val d = engine(InMemoryVerdictStore(), FakeClassifier(emptyMap())).decide(listOf(bus), settings).single()
+        assertEquals(Verdict.BLOCK, d.verdict)
+        assertEquals(DecisionSource.CHANNEL, d.source)
+    }
+
+    @Test
+    fun `outage probe checks fresh AI while preserving all local decisions`() {
+        val store = InMemoryVerdictStore()
+        store.setOverride(bus.id, Verdict.ALLOW)
+        val fake = FakeClassifier(mapOf(bus.id to 0.99))
+        val checker = engine(store, fake)
+        val settings = aiSettings.copy(blockedKeywords = listOf("bus"), blockedChannels = listOf(bus.channel))
+        assertEquals(DecisionSource.PARENT, checker.decide(listOf(bus), settings).single().source)
+        assertEquals(0, fake.calls)
+        assertTrue(checker.probeAiAvailability(listOf(bus), settings))
+        assertEquals(1, fake.calls)
+        assertEquals(Verdict.ALLOW, store.override(bus.id))
+        assertTrue(store.scores.isEmpty())
+        assertTrue(store.hidden.isEmpty())
+    }
+
+    @Test
+    fun `outage probe cannot succeed from absent title missing scores or unconfigured AI`() {
+        val fake = FakeClassifier(emptyMap())
+        val checker = engine(InMemoryVerdictStore(), fake)
+        assertTrue(!checker.probeAiAvailability(listOf(VideoInfo(bus.id)), aiSettings))
+        assertEquals(0, fake.calls)
+        assertTrue(!checker.probeAiAvailability(listOf(bus), aiSettings))
+        assertTrue(!checker.probeAiAvailability(listOf(bus), FilterSettings()))
+    }
+
+    @Test
+    fun `outage probe uses configured fallback and fetched real metadata`() {
+        val fallback = FakeClassifier(mapOf(bus.id to 0.99))
+        val primary = FakeClassifier(emptyMap())
+        val checker = DecisionEngine(InMemoryVerdictStore(), { if (it.type == ProviderType.JEV) fallback else primary }, MetadataFetcher { bus })
+        assertTrue(checker.probeAiAvailability(listOf(VideoInfo(bus.id)), aiSettings.copy(
+            fallbackProvider = ProviderConfig(ProviderType.JEV, apiKey = "fallback"))))
+        assertEquals(1, fallback.calls)
+    }
+
+    @Test
+    fun `titleless decision model never treats unconfigured providers as image support`() {
+        val fake = FakeClassifier(mapOf(bus.id to 0.0))
+        val checker = engine(InMemoryVerdictStore(), fake)
+        val clef = ProviderConfig(ProviderType.CLEF, apiKey = "key", accountId = "account")
+        val primaryOnly = aiSettings.copy(provider = clef, fallbackProvider = ProviderConfig())
+        val fallbackOnly = aiSettings.copy(provider = ProviderConfig(), fallbackProvider = clef)
+        for (settings in listOf(primaryOnly, fallbackOnly)) {
+            val decision = checker.decide(listOf(VideoInfo(bus.id)), settings).single()
+            assertEquals(Verdict.UNKNOWN, decision.verdict)
+            assertEquals(DecisionSource.ERROR, decision.source)
+            assertEquals("No title to check", decision.reason)
+        }
+        assertEquals(0, fake.calls)
+    }
+
+    @Test
+    fun `titleless video skips text primary and can use a vision fallback`() {
+        val text = FakeClassifier(mapOf(bus.id to 0.0))
+        val vision = FakeClassifier(mapOf(bus.id to 0.1))
+        val settings = aiSettings.copy(provider = ProviderConfig(ProviderType.CLEF, apiKey = "key", accountId = "account"),
+            fallbackProvider = ProviderConfig(ProviderType.ANTHROPIC, apiKey = "key"))
+        val checker = DecisionEngine(InMemoryVerdictStore(), { if (it.type == ProviderType.CLEF) text else vision }, null)
+        val decision = checker.decide(listOf(VideoInfo(bus.id)), settings).single()
+        assertEquals(Verdict.ALLOW, decision.verdict)
+        assertTrue(decision.freshAi)
+        assertEquals(0, text.calls)
+        assertEquals(1, vision.calls)
+    }
+
+    @Test
+    fun `failed vision check cannot send titleless video to text fallback`() {
+        var visionCalls = 0
+        val vision = object : VideoClassifier {
+            override fun classify(videos: List<VideoInfo>, rules: String): List<Score> {
+                visionCalls++
+                throw ClassifierException("Quota exhausted")
+            }
+        }
+        val text = FakeClassifier(mapOf(bus.id to 0.0))
+        val settings = aiSettings.copy(fallbackProvider = ProviderConfig(ProviderType.CLEF, apiKey = "key", accountId = "account"))
+        val checker = DecisionEngine(InMemoryVerdictStore(), { if (it.type == ProviderType.CLEF) text else vision }, null)
+        val decision = checker.decide(listOf(VideoInfo(bus.id)), settings).single()
+        assertEquals(Verdict.UNKNOWN, decision.verdict)
+        assertEquals(DecisionSource.ERROR, decision.source)
+        assertTrue(!decision.freshAi)
+        assertEquals(1, visionCalls)
+        assertEquals(0, text.calls)
+    }
+
+    @Test
+    fun `successful vision primary checks titleless video without text fallback`() {
+        val vision = FakeClassifier(mapOf(bus.id to 0.0))
+        val text = FakeClassifier(mapOf(bus.id to 0.0))
+        val settings = aiSettings.copy(fallbackProvider = ProviderConfig(ProviderType.CLEF, apiKey = "key", accountId = "account"))
+        val checker = DecisionEngine(InMemoryVerdictStore(), { if (it.type == ProviderType.CLEF) text else vision }, null)
+        assertEquals(Verdict.ALLOW, checker.decide(listOf(VideoInfo(bus.id)), settings).single().verdict)
+        assertEquals(1, vision.calls)
+        assertEquals(0, text.calls)
+    }
+
 }

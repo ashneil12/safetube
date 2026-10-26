@@ -204,7 +204,7 @@ final class ParentViewController: UIViewController, WKNavigationDelegate, WKUIDe
             changed { store.clearHistory() }
         case "openLink":
             let link = arg(0)
-            if link.hasPrefix("https://"), let url = URL(string: link) {
+            if allowed(), link.hasPrefix("https://"), let url = URL(string: link) {
                 DispatchQueue.main.async { UIApplication.shared.open(url) }
             }
         case "finishSetup", "close":
@@ -275,6 +275,15 @@ final class ParentViewController: UIViewController, WKNavigationDelegate, WKUIDe
     private func save(_ json: String) {
         guard allowed(), let o = JSON.object(json) else { return }
         prefs.rules = JSON.optString(o, "rules").trimmed
+        prefs.allowedContent = JSON.optString(o, "allowedContent").trimmed
+        prefs.exceptions = JSON.optString(o, "exceptions").trimmed
+        prefs.blockOnAiFailure = JSON.optBool(o, "blockOnAiFailure", true)
+        if let p = o["fallbackProvider"] as? [String: Any] {
+            prefs.fallbackProvider = ProviderConfig(ProviderType(rawValue: JSON.optString(p, "type")) ?? .none,
+                apiKey: JSON.optString(p, "apiKey").trimmed, baseUrl: JSON.optString(p, "baseUrl").trimmed,
+                model: JSON.optString(p, "model").trimmed, accountId: JSON.optString(p, "accountId").trimmed,
+                sendThumbnails: JSON.optBool(p, "sendThumbnails", true))
+        }
         var seen = Set<String>()
         let words = (o["keywords"] as? [Any] ?? []).compactMap { ($0 as? String)?.trimmed }
             .filter { !$0.isEmpty && seen.insert($0).inserted }
@@ -345,6 +354,13 @@ final class ParentViewController: UIViewController, WKNavigationDelegate, WKUIDe
     private func settingsJson() -> [String: Any] {
         [
             "rules": prefs.rules,
+            "allowedContent": prefs.allowedContent,
+            "exceptions": prefs.exceptions,
+            "blockOnAiFailure": prefs.blockOnAiFailure,
+            "fallbackProvider": ["type": prefs.fallbackProvider.type.rawValue,
+                "apiKey": prefs.fallbackProvider.apiKey, "baseUrl": prefs.fallbackProvider.baseUrl,
+                "model": prefs.fallbackProvider.model, "accountId": prefs.fallbackProvider.accountId,
+                "sendThumbnails": prefs.fallbackProvider.sendThumbnails] as [String: Any],
             "keywords": KeywordFilter.parseList(prefs.keywords),
             "strictness": prefs.strictness.rawValue,
             "provider": [
@@ -385,8 +401,37 @@ final class ParentViewController: UIViewController, WKNavigationDelegate, WKUIDe
     }
 
     private func lookup(_ id: String) -> [String: Any] {
-        let info = VideoInfo.isValidId(id) ? YouTubeOEmbed.shared.fetch(id) : nil
-        return ["title": info?.title ?? "", "channel": info?.channel ?? "", "channelId": info?.channelId ?? ""]
+        guard allowed(), VideoInfo.isValidId(id) else { return ["error": "Unlock parent settings and choose a valid video."] }
+        let info = YouTubeOEmbed.shared.fetch(id)
+        var result = store.reviewDetails(id, settings: prefs.filterSettings())
+        result["id"] = id
+        if let info = info {
+            if !info.title.isBlank { result["title"] = info.title }
+            if !info.channel.isBlank { result["channel"] = info.channel }
+            if !info.channelId.isBlank { result["channelId"] = info.channelId }
+        }
+        let settings = prefs.filterSettings()
+        let video = VideoInfo(id, result["title"] as? String ?? "", result["channel"] as? String ?? "",
+            context: result["description"] as? String ?? "", channelId: result["channelId"] as? String ?? "")
+        if store.parentOverride(id) == nil {
+            if let channel = ChannelBlocklist(settings.blockedChannels).match(video) {
+                result["source"] = DecisionSource.channel.rawValue
+                result["reason"] = "Blocked channel: \(channel)"
+                result["verdict"] = Verdict.block.rawValue
+                result.removeValue(forKey: "score")
+                result.removeValue(forKey: "historical")
+            } else if let keyword = KeywordFilter(settings.blockedKeywords).firstMatch(video.allText) {
+                result["source"] = DecisionSource.keyword.rawValue
+                result["reason"] = "Keyword: \(keyword)"
+                result["verdict"] = Verdict.block.rawValue
+                result.removeValue(forKey: "score")
+                result.removeValue(forKey: "historical")
+            }
+        }
+        if (result["description"] as? String ?? "").isBlank {
+            result["description"] = "A full description is not available. The filter uses the title, channel, thumbnail and any text YouTube showed next to the video."
+        }
+        return result
     }
 
     private func suggest(_ args: [String: Any]) throws -> [String: Any] {
@@ -405,21 +450,21 @@ final class ParentViewController: UIViewController, WKNavigationDelegate, WKUIDe
 
     /// Runs the saved rules against two example videos so the parent can see it working.
     private func testAi() throws -> [String: Any] {
-        let settings = prefs.filterSettings()
-        var provider = settings.provider
-        provider.sendThumbnails = false
-        guard let classifier = Classifiers.create(provider) else { return ["error": "Pick a checker first."] }
+        var settings = prefs.filterSettings()
+        settings.provider.sendThumbnails = false
+        settings.fallbackProvider.sendThumbnails = false
         let samples = [
             VideoInfo("aaaaaaaaaaa", "Five Little Pumpkins | Halloween Song for Kids", "Sing Along Street"),
             VideoInfo("bbbbbbbbbbb", "Counting to 20 with Building Blocks", "Number Garden"),
         ]
-        var scores: [String: Score] = [:]
-        for s in try classifier.classify(samples, rules: settings.rules) { scores[s.id] = s }
+        let decisions = DecisionEngine(InMemoryVerdictStore(), metadata: nil).decide(samples, settings, forceFresh: true)
+        var scores: [String: Decision] = [:]
+        for d in decisions { scores[d.id] = d }
         return ["results": samples.map { v -> [String: Any] in
             let s = scores[v.id]
             return [
                 "title": v.title,
-                "hidden": s.map { settings.strictness.verdictFor($0.p) == .block } ?? false,
+                "hidden": s.map { $0.verdict != .allow } ?? true,
                 "reason": s?.reason ?? "No answer",
             ]
         }]

@@ -28,6 +28,10 @@ function check(name, cond) {
 
 (async () => {
   const server = http.createServer((req, res) => {
+    if (req.url.startsWith('/watch?isolated=')) {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end('<html><body><div id="player"><video></video></div></body></html>'); return;
+    }
     if (req.url.startsWith('/youtubei/v1/player')) {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ videoDetails: { videoId: 'WHEELSBUS01' }, playerAds: [{}], adPlacements: [{}] }));
@@ -279,6 +283,53 @@ function check(name, cond) {
   await page.waitForURL(/\/watch\?v=WHEELSBUS01/, { timeout: 3000 }).catch(() => {});
   check('a Short opens in the normal player instead', page.url().endsWith('/watch?v=WHEELSBUS01'));
 
+  // Fail closed across cached allowances, late decisions, reset and SPA navigation.
+  await page.goto(base + '/watch?v=WHEELSBUS01');
+  await page.waitForTimeout(100);
+  await answer();
+  await page.evaluate(() => window.__safetube.setAiUnavailable(true));
+  check('AI exhaustion shows a whole-page safety wall', await page.isVisible('#st-overlay') && (await page.textContent('#st-overlay')).includes('YouTube is paused'));
+  await page.evaluate(() => { const div = document.createElement('div'); div.innerHTML = '<span id="forced-visible" style="visibility:visible">Unexpected page content</span>'; document.body.appendChild(div); });
+  check('safety wall hides descendants even when page styles explicitly make them visible', (await vis('#forced-visible')) === 'hidden');
+  check('AI exhaustion hides cached allowed player', (await vis('#player')) === 'hidden');
+  await page.evaluate(() => {
+    window.__safetube.apply({ WHEELSBUS01: 'allow' });
+    history.pushState({}, '', '/');
+    window.__safetube.reset({ aiUnavailable: false });
+    window.__safetube.apply({ WHEELSBUS01: 'allow' });
+    window.__safetube.scan();
+  });
+  check('late allowances, navigation and reset cannot remove the outage wall', (await page.textContent('#st-overlay')).includes('YouTube is paused') && (await vis('#card-WHEELSBUS01')) === 'hidden');
+  const blockedClick = await page.evaluate(() => {
+    const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
+    document.querySelector('#card-WHEELSBUS01 a').dispatchEvent(ev);
+    return ev.defaultPrevented;
+  });
+  check('navigation clicks behind safety wall are cancelled', blockedClick);
+  await page.evaluate(() => { window.__pauseCount = 0; const v = document.querySelector('video'); v.pause = () => window.__pauseCount++; v.dispatchEvent(new Event('play', { bubbles: true })); });
+  check('play events are paused during outage on a non-watch page', await page.evaluate(() => window.__pauseCount > 0));
+  await page.getByRole('button', { name: 'Parent settings', exact: true }).click();
+  check('safety wall provides parent access', await page.evaluate(() => window.__parentOpened === 1));
+  check('safety wall provides a retry action', await page.getByRole('button', { name: 'Retry checks', exact: true }).isVisible());
+  if (SHOTS) { fs.mkdirSync(path.join(__dirname, 'screenshots'), { recursive: true }); await page.screenshot({ path: path.join(__dirname, 'screenshots/ai-unavailable.png') }); }
+  await page.evaluate(() => window.__safetube.setAiUnavailable(false));
+  check('explicit fresh-success signal removes the wall', await page.locator('#st-overlay').count() === 0 && (await vis('#card-WHEELSBUS01')) === 'visible');
+  await page.evaluate(() => window.__safetube.reset({ aiUnavailable: true }));
+  check('native outage config starts locked on reset', (await page.textContent('#st-overlay')).includes('YouTube is paused'));
+
+  const lockedBoot = await browser.newPage();
+  await lockedBoot.addInitScript(() => { window.__retrySubmitted = []; window.SafeTubeAndroid = { config: () => JSON.stringify({ aiUnavailable: true }), submit: (json) => window.__retrySubmitted.push(...JSON.parse(json)) }; });
+  await lockedBoot.addInitScript(FILTER);
+  await lockedBoot.goto(base + '/watch?isolated=1&v=WHEELSBUS01');
+  await lockedBoot.waitForTimeout(100);
+  check('native failure latch remains locked through a full page reload', await lockedBoot.isVisible('#st-overlay') && await lockedBoot.locator('html[data-st-ai-unavailable]').count() === 1);
+  check('persisted outage retries the directly opened video without recommendation cards', await lockedBoot.evaluate(() => window.__retrySubmitted.some((v) => v.id === 'WHEELSBUS01')));
+  await lockedBoot.evaluate(() => { window.__safetube.apply({ WHEELSBUS01: 'allow' }); for (let i = 0; i < 5; i++) window.__safetube.scan(); });
+  await lockedBoot.waitForTimeout(100);
+  check('local allowances while locked are retried with backoff rather than a submit loop', await lockedBoot.evaluate(() => window.__retrySubmitted.length === 1));
+  await lockedBoot.evaluate(() => { window.__safetube.setAiUnavailable(false); window.__safetube.apply({ WHEELSBUS01: 'allow' }); });
+  check('fresh successful retry can unlock an isolated direct watch page', await lockedBoot.locator('#st-overlay').count() === 0 && await lockedBoot.locator('#player').isVisible());
+  await lockedBoot.close();
   await browser.close();
   server.close();
   console.log(failures ? `\n${failures} check(s) failed` : '\nAll checks passed');

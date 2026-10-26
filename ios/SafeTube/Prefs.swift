@@ -17,6 +17,49 @@ final class Prefs {
         set { sp.set(newValue, forKey: "rules") }
     }
 
+    var allowedContent: String {
+        get { string("allowedContent", "") }
+        set { sp.set(newValue, forKey: "allowedContent") }
+    }
+    var exceptions: String {
+        get { string("exceptions", "") }
+        set { sp.set(newValue, forKey: "exceptions") }
+    }
+    var aiUnavailable: Bool {
+        get {
+            let settings = filterSettings()
+            if settings.mustBlockForAiConfiguration {
+                sp.set(settings.aiConfigHash(), forKey: "aiUnavailableHash")
+                return true
+            }
+            return settings.blockOnAiFailure && string("aiUnavailableHash", "") == settings.aiConfigHash()
+        }
+        set {
+            if newValue { sp.set(filterSettings().aiConfigHash(), forKey: "aiUnavailableHash") }
+            else { sp.removeObject(forKey: "aiUnavailableHash") }
+        }
+    }
+    var blockOnAiFailure: Bool {
+        get { bool("blockOnAiFailure", true) }
+        set { sp.set(newValue, forKey: "blockOnAiFailure") }
+    }
+    var fallbackProvider: ProviderConfig {
+        get {
+            ProviderConfig(ProviderType(rawValue: string("fallbackType", "NONE")) ?? .none,
+                apiKey: Keychain.get("fallbackKey"), baseUrl: string("fallbackBaseUrl", ""),
+                model: string("fallbackModel", ""), accountId: string("fallbackAccountId", ""),
+                sendThumbnails: bool("fallbackThumbs", true))
+        }
+        set {
+            sp.set(newValue.type.rawValue, forKey: "fallbackType")
+            Keychain.set("fallbackKey", newValue.apiKey)
+            sp.set(newValue.baseUrl, forKey: "fallbackBaseUrl")
+            sp.set(newValue.model, forKey: "fallbackModel")
+            sp.set(newValue.accountId, forKey: "fallbackAccountId")
+            sp.set(newValue.sendThumbnails, forKey: "fallbackThumbs")
+        }
+    }
+
     var keywords: String {
         get { string("keywords", AppDefaults.keywords) }
         set { sp.set(newValue, forKey: "keywords") }
@@ -297,12 +340,15 @@ final class Prefs {
                 model: model,
                 accountId: accountId,
                 sendThumbnails: sendThumbnails
-            )
+            ),
+            allowedContent: allowedContent, exceptions: exceptions,
+            fallbackProvider: fallbackProvider, blockOnAiFailure: blockOnAiFailure
         )
     }
 
-    func pageConfigJson() -> String {
+    func pageConfigJson(aiUnavailable: Bool = false) -> String {
         JSON.string([
+            "aiUnavailable": aiUnavailable || self.aiUnavailable,
             "hideShorts": hideShorts,
             "hideComments": hideComments,
             "blockMenu": true,

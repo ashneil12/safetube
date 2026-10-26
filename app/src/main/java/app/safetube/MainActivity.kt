@@ -154,12 +154,14 @@ class MainActivity : Activity() {
         if (prefs.version != seenVersion) {
             // Settings changed: the page forgets its decisions and re-checks what's on screen.
             seenVersion = prefs.version
+            bridge.settingsChanged()
             if (applyRestrictedMode()) {
                 webView.reload()
             } else {
                 webView.evaluateJavascript(
-                    "window.__safetube && window.__safetube.reset(${prefs.pageConfigJson()})", null
+                    "window.__safetube && window.__safetube.reset(${bridge.config()})", null
                 )
+                bridge.reapplyAiLock()
             }
         }
         lastTick = SystemClock.elapsedRealtime()
@@ -273,6 +275,7 @@ class MainActivity : Activity() {
         }
 
         override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+            bridge.pageStarted()
             bridge.currentHost = FilterBridge.hostOf(url)
             if (!documentStartSupported) {
                 cover.visibility = View.VISIBLE
@@ -285,6 +288,7 @@ class MainActivity : Activity() {
         }
 
         override fun onPageFinished(view: WebView, url: String?) {
+            bridge.reapplyAiLock()
             bridge.currentHost = FilterBridge.hostOf(url)
             if (!documentStartSupported) {
                 injectScript(view)
@@ -440,7 +444,7 @@ class MainActivity : Activity() {
                 listOf(handle, name).filter { it.isNotBlank() }.forEach { prefs.addBlockedChannel(it) }
                 syncVersion()
                 // Re-check everything on screen against the new channel list.
-                webView.evaluateJavascript("window.__safetube && window.__safetube.reset(${prefs.pageConfigJson()})", null)
+                webView.evaluateJavascript("window.__safetube && window.__safetube.reset(${bridge.config()})", null)
                 toast("Everything from ${name.ifBlank { handle }} is hidden." +
                     if (by == "child") " Only a grown-up can bring it back." else "")
             }
