@@ -45,6 +45,7 @@ final class SameAsAndroidTests: XCTestCase {
     func testDefaultModelsAreIdentical() throws {
         let models = try kotlin("Models.kt")
         XCTAssertEqual(ProviderConfig.defaultClefModel, try constant(models, "DEFAULT_CLEF_MODEL"))
+        XCTAssertEqual(ProviderConfig.defaultOpenRouterDecisionModel, try constant(models, "DEFAULT_OPENROUTER_DECISION_MODEL"))
         XCTAssertEqual(ProviderConfig.defaultJevModel, try constant(models, "DEFAULT_JEV_MODEL"))
         XCTAssertEqual(ProviderConfig.defaultAnthropicModel, try constant(models, "DEFAULT_ANTHROPIC_MODEL"))
     }

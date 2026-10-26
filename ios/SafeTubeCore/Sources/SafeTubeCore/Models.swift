@@ -92,6 +92,8 @@ public enum ProviderType: String, CaseIterable {
     case clef = "CLEF"
     /// TypeSafe's Jev decision model through OpenRouter's Decisions API.
     case jev = "JEV"
+    /// API-key-only OpenRouter Decisions route; uses paid OpenRouter credit.
+    case openRouterDecisions = "OPENROUTER_DECISIONS"
     case anthropic = "ANTHROPIC"
     /// OpenAI, Gemini, OpenRouter chat models, Groq, Ollama and anything else that speaks /chat/completions.
     case openAiCompatible = "OPENAI_COMPATIBLE"
@@ -101,6 +103,7 @@ public enum ProviderType: String, CaseIterable {
         case .none: return "Off"
         case .clef: return "Clef (Cloudflare)"
         case .jev: return "Jev (OpenRouter)"
+        case .openRouterDecisions: return "Clef Flash (OpenRouter)"
         case .anthropic: return "Claude (Anthropic)"
         case .openAiCompatible: return "OpenAI-compatible"
         }
@@ -131,29 +134,41 @@ public struct ProviderConfig: Equatable {
         switch type {
         case .none: return false
         case .clef: return !apiKey.isBlank && !accountId.isBlank
-        case .jev, .anthropic: return !apiKey.isBlank
+        case .jev, .openRouterDecisions, .anthropic: return !apiKey.isBlank
         // Local servers (Ollama etc.) often need no key.
         case .openAiCompatible: return !baseUrl.isBlank && !model.isBlank
         }
     }
 
     /// Decision models answer typed questions instead of writing text.
-    public var isDecisionModel: Bool { type == .clef || type == .jev }
+    public var isDecisionModel: Bool { type == .clef || type == .jev || type == .openRouterDecisions }
 
-    /// Thumbnails are only sent to chat models; the decision-model APIs don't take image links.
+    /// This client sends thumbnails only to chat providers; decision requests here are text-only.
     public var usesThumbnails: Bool { sendThumbnails && !isDecisionModel }
+
+    public var needsBoundedDecisionState: Bool {
+        type == .clef || (isDecisionModel && modelOrDefault().lowercased().hasPrefix("cloudflare/clef"))
+    }
+
+    fileprivate func cacheIdentity() -> String {
+        let identity = [type.rawValue, baseUrl.trimmed, modelOrDefault(), accountId.trimmed,
+            Hashing.sha256(apiKey), String(usesThumbnails)].joined(separator: "\u{0}")
+        return identity + (needsBoundedDecisionState ? "\u{0}clef-state-v1" : "")
+    }
 
     public func modelOrDefault() -> String {
         if !model.isBlank { return model }
         switch type {
         case .clef: return ProviderConfig.defaultClefModel
         case .jev: return ProviderConfig.defaultJevModel
+        case .openRouterDecisions: return ProviderConfig.defaultOpenRouterDecisionModel
         case .anthropic: return ProviderConfig.defaultAnthropicModel
         case .openAiCompatible, .none: return ""
         }
     }
 
     public static let defaultClefModel = "clef"
+    public static let defaultOpenRouterDecisionModel = "cloudflare/clef-flash"
     public static let defaultJevModel = "typesafe/jev-1.14"
     public static let defaultAnthropicModel = "claude-haiku-5-5"
 }
@@ -211,12 +226,7 @@ public struct FilterSettings {
     /// Cached AI scores are only reused while this stays the same. Strictness is
     /// deliberately left out: scores are cached and the threshold is applied on read.
     public func aiConfigHash() -> String {
-        let parts = [effectiveRules(), provider.type.rawValue, provider.baseUrl.trimmed,
-            provider.modelOrDefault(), provider.accountId.trimmed, Hashing.sha256(provider.apiKey),
-            String(provider.usesThumbnails), fallbackProvider.type.rawValue,
-            fallbackProvider.baseUrl.trimmed, fallbackProvider.modelOrDefault(),
-            fallbackProvider.accountId.trimmed, Hashing.sha256(fallbackProvider.apiKey),
-            String(fallbackProvider.usesThumbnails), String(PromptBuilder.version)]
+        let parts = [effectiveRules(), provider.cacheIdentity(), fallbackProvider.cacheIdentity(), String(PromptBuilder.version)]
         return String(Hashing.sha256(parts.joined(separator: "\u{0}")).prefix(16))
     }
 }

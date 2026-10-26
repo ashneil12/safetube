@@ -9,24 +9,59 @@ import Foundation
 public final class DecisionModelClassifier: VideoClassifier {
     private let config: ProviderConfig
     private let endpointOverride: String?
+    private let transport: (String, [String: String], String) throws -> Http.Response
+    public static let maxClefStateBytes = 1800
 
-    public init(_ config: ProviderConfig, endpointOverride: String? = nil) {
+    public init(_ config: ProviderConfig, endpointOverride: String? = nil,
+                transport: @escaping (String, [String: String], String) throws -> Http.Response = { endpoint, headers, body in
+                    try Http.request(endpoint, method: "POST", headers: headers, body: body)
+                }) {
         self.config = config
         self.endpointOverride = endpointOverride
+        self.transport = transport
     }
 
     public func classify(_ videos: [VideoInfo], rules: String) throws -> [Score] {
         if videos.isEmpty { return [] }
-        let response = try Http.request(
-            endpoint(),
-            method: "POST",
-            headers: ["Authorization": "Bearer \(config.apiKey.trimmed)"],
-            body: JSON.string(buildRequest(videos, rules: rules))
-        )
-        if !(200...299).contains(response.code) {
-            throw ClassifierException("\(config.type.label) returned \(response.code): \(response.body.take(300))")
+        // Preflight the entire input before sending anything: a later oversized video must not
+        // incur earlier requests, and parental rules are never truncated to make a request fit.
+        let batches = try requestBatches(videos, rules: rules)
+        var scores: [Score] = []
+        for batch in batches {
+            let response = try transport(endpoint(), ["Authorization": "Bearer \(config.apiKey.trimmed)"],
+                JSON.string(buildRequest(batch, rules: rules)))
+            if !(200...299).contains(response.code) {
+                throw ClassifierException("\(config.type.label) returned \(response.code): \(response.body.take(300))")
+            }
+            scores += try parseAnswers(response.body, batch)
         }
-        return try parseAnswers(response.body, videos)
+        return scores
+    }
+
+    /// Clef accepts a small state. Budget serialized UTF-8 bytes conservatively, including
+    /// JSON keys and escaping, rather than guessing tokens from an English character count.
+    public func requestBatches(_ videos: [VideoInfo], rules: String) throws -> [[VideoInfo]] {
+        guard !videos.isEmpty else { return [] }
+        let limited = config.needsBoundedDecisionState
+        guard limited else { return [videos] }
+        func fits(_ candidates: [VideoInfo]) -> Bool {
+            guard let state = buildRequest(candidates, rules: rules)["state"] as? [String: Any] else { return false }
+            return JSON.string(state).utf8.count <= DecisionModelClassifier.maxClefStateBytes
+        }
+        var batches: [[VideoInfo]] = []
+        var pending: [VideoInfo] = []
+        for video in videos {
+            guard fits([video]) else {
+                throw ClassifierException("These rules and video details are too long for Clef to check safely. Shorten your hide, Only show or clarification rules, or choose another decision model.")
+            }
+            if !fits(pending + [video]) {
+                batches.append(pending)
+                pending = []
+            }
+            pending.append(video)
+        }
+        if !pending.isEmpty { batches.append(pending) }
+        return batches
     }
 
     public func endpoint() -> String {
@@ -85,7 +120,7 @@ public final class DecisionModelClassifier: VideoClassifier {
         }
         return videos.enumerated().compactMap { i, v in
             guard let p = yesProbability(answers[questionKey(i)]), p.isFinite, (0...1).contains(p) else { return nil }
-            return Score(v.id, p, p >= 0.5 ? "matches your rules" : "looks fine")
+            return Score(v.id, p, "Decision model estimated a rule-violation probability; this provider does not supply a detailed explanation.")
         }
     }
 

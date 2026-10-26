@@ -241,6 +241,7 @@ final class ParentViewController: UIViewController, WKNavigationDelegate, WKUIDe
                 "models": [
                     "CLEF": ProviderConfig.defaultClefModel,
                     "JEV": ProviderConfig.defaultJevModel,
+                    "OPENROUTER_DECISIONS": ProviderConfig.defaultOpenRouterDecisionModel,
                     "ANTHROPIC": ProviderConfig.defaultAnthropicModel,
                 ],
             ] as [String: Any],

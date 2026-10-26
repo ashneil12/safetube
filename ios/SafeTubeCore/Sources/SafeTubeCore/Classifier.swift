@@ -31,7 +31,7 @@ public enum Classifiers {
     public static func create(_ config: ProviderConfig) -> VideoClassifier? {
         switch config.type {
         case .none: return nil
-        case .clef, .jev: return DecisionModelClassifier(config)
+        case .clef, .jev, .openRouterDecisions: return DecisionModelClassifier(config)
         case .anthropic: return AnthropicClassifier(config)
         case .openAiCompatible: return OpenAiCompatibleClassifier(config)
         }

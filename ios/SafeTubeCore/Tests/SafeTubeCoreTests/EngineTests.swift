@@ -510,3 +510,112 @@ extension MissingTitleProtectionTests {
         XCTAssertEqual(backup.seen, [[video.id]])
     }
 }
+
+final class OpenRouterAndRequestBudgetTests: XCTestCase {
+    func videos(_ count: Int, heavy: Bool = true) -> [VideoInfo] {
+        (0..<count).map { i in
+            VideoInfo("v" + String(format: "%010d", i), "Video \(i) " + (heavy ? String(repeating: "界", count: 80) : "title"),
+                "Channel", context: heavy ? String(repeating: "ă", count: 140) : "snippet")
+        }
+    }
+    func testOpenRouterKeyOnlyDefaultAndLegacyModelsRemainUnchanged() {
+        let config = ProviderConfig(.openRouterDecisions, apiKey: "test")
+        XCTAssertTrue(config.isAiEnabled)
+        XCTAssertTrue(config.isDecisionModel)
+        XCTAssertFalse(config.usesThumbnails)
+        XCTAssertFalse(ProviderConfig(.openRouterDecisions).isAiEnabled)
+        XCTAssertEqual(config.modelOrDefault(), "cloudflare/clef-flash")
+        XCTAssertEqual(DecisionModelClassifier(config).endpoint(), "https://openrouter.ai/api/alpha/decisions")
+        XCTAssertTrue(Classifiers.create(config) is DecisionModelClassifier)
+        XCTAssertEqual(ProviderConfig(.jev, apiKey: "test").modelOrDefault(), "typesafe/jev-1.14")
+        XCTAssertEqual(ProviderConfig(.clef, apiKey: "test", accountId: "acc").modelOrDefault(), "clef")
+        XCTAssertEqual(ProviderConfig(.openRouterDecisions, apiKey: "test", model: "typesafe/custom").modelOrDefault(), "typesafe/custom")
+    }
+    func testStatePartitionsPreserveRulesAndAllIdsWithinUtf8Budget() throws {
+        let input = videos(9)
+        let rules = "Only show theme park design videos. " + String(repeating: "Știință ", count: 18)
+        for config in [ProviderConfig(.clef, apiKey: "test", accountId: "acc"),
+                       ProviderConfig(.openRouterDecisions, apiKey: "test"),
+                       ProviderConfig(.jev, apiKey: "test", model: "cloudflare/clef-flash")] {
+            let classifier = DecisionModelClassifier(config)
+            let batches = try classifier.requestBatches(input, rules: rules)
+            XCTAssertGreaterThan(batches.count, 1)
+            XCTAssertEqual(batches.flatMap { $0.map { $0.id } }, input.map { $0.id })
+            for batch in batches {
+                let state = try XCTUnwrap(classifier.buildRequest(batch, rules: rules)["state"] as? [String: Any])
+                XCTAssertEqual(state["parent_rules"] as? String, rules.trimmed)
+                XCTAssertLessThanOrEqual(JSON.string(state).utf8.count, 1800)
+            }
+        }
+    }
+    func testPartitionedHttpResponsesMapPerChunkQuestionIdsToOriginalVideos() throws {
+        let input = videos(7)
+        var calls = 0
+        let classifier = DecisionModelClassifier(ProviderConfig(.openRouterDecisions, apiKey: "test"), transport: { endpoint, headers, body in
+            calls += 1
+            XCTAssertEqual(endpoint, "https://openrouter.ai/api/alpha/decisions")
+            XCTAssertEqual(headers["Authorization"], "Bearer test")
+            let req = try XCTUnwrap(JSON.object(body))
+            let state = try XCTUnwrap(req["state"] as? [String: Any])
+            let entries = try XCTUnwrap(state["videos"] as? [String: [String: Any]])
+            XCTAssertLessThanOrEqual(JSON.string(state).utf8.count, 1800)
+            var answers: [String: Double] = [:]
+            for (key, video) in entries {
+                let title = try XCTUnwrap(video["title"] as? String)
+                let index = try XCTUnwrap(Int(title.split(separator: " ")[1]))
+                answers[key] = index.isMultiple(of: 2) ? 0.1 : 0.9
+            }
+            return Http.Response(code: 200, body: JSON.string(["answers": answers]))
+        })
+        let scores = try classifier.classify(input, rules: "No violence")
+        XCTAssertGreaterThan(calls, 1)
+        XCTAssertEqual(scores.map { $0.id }, input.map { $0.id })
+        XCTAssertEqual(scores.map { $0.p }, (0..<input.count).map { $0.isMultiple(of: 2) ? 0.1 : 0.9 })
+    }
+    func testOversizedRulesAndSingleVideoRejectedBeforeAnyHttp() {
+        var calls = 0
+        let classifier = DecisionModelClassifier(ProviderConfig(.openRouterDecisions, apiKey: "test"), transport: { _, _, _ in
+            calls += 1
+            return Http.Response(code: 200, body: "{}")
+        })
+        XCTAssertThrowsError(try classifier.classify(videos(1, heavy: false), rules: String(repeating: "親", count: 700)))
+        let huge = VideoInfo("bbbbbbbbbbb", String(repeating: "界", count: 300), String(repeating: "界", count: 120), context: String(repeating: "界", count: 300))
+        XCTAssertThrowsError(try classifier.classify(videos(1, heavy: false) + [huge], rules: "No violence"))
+        XCTAssertEqual(calls, 0)
+    }
+    func testOtherDecisionModelsKeepExistingBatchAndMissingAnswersAreNotAllowed() throws {
+        let input = videos(4)
+        let legacy = DecisionModelClassifier(ProviderConfig(.jev, apiKey: "test"))
+        XCTAssertEqual(try legacy.requestBatches(input, rules: "No violence"), [input])
+        let classifier = DecisionModelClassifier(ProviderConfig(.openRouterDecisions, apiKey: "test"), transport: { _, _, _ in
+            Http.Response(code: 200, body: #"{"answers":{"v1":0.4}}"#)
+        })
+        let scores = try classifier.classify(videos(3, heavy: false), rules: "No violence")
+        XCTAssertEqual(scores.count, 1)
+        XCTAssertEqual(scores.first?.id, videos(1, heavy: false)[0].id)
+        XCTAssertEqual(Strictness.strict.verdictFor(try XCTUnwrap(scores.first?.p)), .block)
+        XCTAssertTrue(scores.first?.reason.contains("does not supply a detailed explanation") ?? false)
+        XCTAssertFalse(scores.first?.reason.contains("looks fine") ?? true)
+    }
+}
+
+extension OpenRouterAndRequestBudgetTests {
+    func testOnlyBoundedDecisionRoutesInvalidateLegacyCacheIdentity() {
+        func oldIdentity(_ p: ProviderConfig) -> String {
+            [p.type.rawValue, p.baseUrl.trimmed, p.modelOrDefault(), p.accountId.trimmed,
+                Hashing.sha256(p.apiKey), String(p.usesThumbnails)].joined(separator: "\u{0}")
+        }
+        for provider in [ProviderConfig(.clef, apiKey: "test", accountId: "acc"),
+                         ProviderConfig(.jev, apiKey: "test"),
+                         ProviderConfig(.anthropic, apiKey: "test"),
+                         ProviderConfig(.openRouterDecisions, apiKey: "test")] {
+            let settings = FilterSettings(rules: "No violence", provider: provider)
+            let oldParts = [settings.effectiveRules(), oldIdentity(provider), oldIdentity(settings.fallbackProvider), String(PromptBuilder.version)]
+            let legacyHash = String(Hashing.sha256(oldParts.joined(separator: "\u{0}")).prefix(16))
+            if provider.needsBoundedDecisionState { XCTAssertNotEqual(settings.aiConfigHash(), legacyHash) }
+            else { XCTAssertEqual(settings.aiConfigHash(), legacyHash) }
+        }
+        XCTAssertFalse(ProviderConfig(.openAiCompatible, model: "cloudflare/clef-flash").needsBoundedDecisionState)
+        XCTAssertThrowsError(try KeywordSuggester(ProviderConfig(.openRouterDecisions, apiKey: "test")).suggest("No violence"))
+    }
+}
