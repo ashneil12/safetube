@@ -18,6 +18,11 @@ module.exports = async function demandTests({ browser, base, filter, check }) {
   const hidden = (p, sel) => p.$eval(sel, (el) => getComputedStyle(el).visibility === 'hidden');
   const page = await makePage();
   check('viewport demand checks visible and small near-screen prefetch cards', await asked(page, 'WHEELSBUS01') === 1 && await asked(page, 'NEARVIDEO01') === 1);
+  check('boxless wrapper keeps a measurable visible-position link hidden until checked', await page.$eval('#contents-wrapper', (el) => el.getBoundingClientRect().width === 0) && await page.$eval('#contents-link', (el) => el.getBoundingClientRect().width > 0 && getComputedStyle(el).visibility === 'hidden'));
+  check('display contents wrapper submits its own visible link exactly once', await asked(page, 'CONTENTS001') === 1);
+  check('display none wrapper with no visible child makes no AI request', await asked(page, 'NOLAYOUT001') === 0);
+  await page.evaluate(() => window.__safetube.apply({ CONTENTS001: 'allow' }));
+  check('boxless wrapper and link appear only after their own decision', !await hidden(page, '#contents-link'));
   check('loaded far-offscreen cards and loose links make no AI submissions', await asked(page, 'FARVIDEO001') === 0 && await asked(page, 'LOOSE000001') === 0 && await asked(page, 'RESIZE00001') === 0);
   check('far-offscreen cards remain pending and hidden with measurable layout', await page.$eval('#far', (el) => el.getAttribute('data-st') === 'pending' && getComputedStyle(el).visibility === 'hidden' && el.getBoundingClientRect().height > 0));
   check('far-offscreen loose video links stay hidden', await hidden(page, '#far-link'));
@@ -71,5 +76,10 @@ module.exports = async function demandTests({ browser, base, filter, check }) {
   await resized.evaluate(() => history.pushState({}, '', '/watch?v=SPAWATCH001'));
   await resized.waitForTimeout(100);
   check('SPA watch navigation checks the new id despite previous allow and offscreen player', await asked(resized, 'SPAWATCH001') === 1 && await hidden(resized, '#player'));
+  const geometry = await resized.$eval('#far', (el) => ({ top: el.getBoundingClientRect().top, height: el.getBoundingClientRect().height }));
+  await resized.evaluate(() => { history.pushState({}, '', '/'); window.__safetube.setAiUnavailable(true); window.__safetube.scan(); });
+  await resized.waitForTimeout(220);
+  const lockedGeometry = await resized.$eval('#far', (el) => ({ top: el.getBoundingClientRect().top, height: el.getBoundingClientRect().height }));
+  check('inherited outage visibility preserves card layout and does not create offscreen demand', geometry.top === lockedGeometry.top && geometry.height === lockedGeometry.height && await asked(resized, 'FARVIDEO001') === 0 && await hidden(resized, '#far'));
   await resized.close();
 };

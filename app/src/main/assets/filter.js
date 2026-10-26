@@ -408,6 +408,9 @@
     }
     if (mark(card, id) === 'pending') {
       var target = nearScreen(card) ? card : link;
+      // display:contents wrappers have no own box. Mark the measurable link now,
+      // so flush can verify its video id even before the link pass runs.
+      if (target === link) mark(link, id);
       need(describe(card, link, id), false, target);
     }
   }
