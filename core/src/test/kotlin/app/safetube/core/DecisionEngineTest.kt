@@ -275,4 +275,20 @@ class DecisionEngineTest {
         assertEquals(1, fallback.calls)
     }
 
+    @Test
+    fun `titleless decision model never treats unconfigured providers as image support`() {
+        val fake = FakeClassifier(mapOf(bus.id to 0.0))
+        val checker = engine(InMemoryVerdictStore(), fake)
+        val clef = ProviderConfig(ProviderType.CLEF, apiKey = "key", accountId = "account")
+        val primaryOnly = aiSettings.copy(provider = clef, fallbackProvider = ProviderConfig())
+        val fallbackOnly = aiSettings.copy(provider = ProviderConfig(), fallbackProvider = clef)
+        for (settings in listOf(primaryOnly, fallbackOnly)) {
+            val decision = checker.decide(listOf(VideoInfo(bus.id)), settings).single()
+            assertEquals(Verdict.UNKNOWN, decision.verdict)
+            assertEquals(DecisionSource.ERROR, decision.source)
+            assertEquals("No title to check", decision.reason)
+        }
+        assertEquals(0, fake.calls)
+    }
+
 }
