@@ -113,6 +113,7 @@ class ParentActivity : Activity() {
                         "models", JSONObject()
                             .put("CLEF", ProviderConfig.DEFAULT_CLEF_MODEL)
                             .put("JEV", ProviderConfig.DEFAULT_JEV_MODEL)
+                            .put("OPENROUTER_DECISIONS", ProviderConfig.DEFAULT_OPENROUTER_DECISION_MODEL)
                             .put("ANTHROPIC", ProviderConfig.DEFAULT_ANTHROPIC_MODEL)
                     )
             )

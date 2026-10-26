@@ -16,6 +16,9 @@ rules simply aren't there.
 
 - **Unknown means hidden.** Every video thumbnail, title and link starts invisible. It only
   appears once SafeTube has decided it's fine, so nothing flashes up and then disappears.
+- **Check what is coming onto the screen.** Loaded video cards far offscreen stay hidden without
+  requesting AI checks. SafeTube checks them as they approach the screen; the current video
+  and direct links are checked immediately. Cached decisions are still reused.
 - **Two layers of checks.** A keyword list (e.g. `halloween, witch, ghost`) is checked
   instantly on the device. Optionally, an AI model reads each video's title, channel and
   thumbnail against your plain-English rules.
@@ -108,17 +111,34 @@ same setup, PIN, rules, AI options and hold-to-hide menu.
 
 Without an AI, the keyword list and your blocked videos and channels still work, fully
 offline. Hold the YouTube logo for three seconds, enter your PIN, open
-**Smart checker**, and set up one or both of these:
+**Smart checker**. For the recommended setup, choose **Clef Flash via OpenRouter**, paste your
+OpenRouter API key, and tap **Test it**. Your OpenRouter account needs credit. You do not need
+a Cloudflare account ID, base URL, custom model or backup checker.
+
+**Advanced: model** lets you choose another OpenRouter Decisions model ID, such as
+`typesafe/jev-1.14`. Reset restores `cloudflare/clef-flash`. Chat models belong under the
+OpenAI-compatible checker instead. **Other checkers** keeps the alternative services
+available. Existing saved providers are preserved when updating the app.
+
+An **Optional backup checker** is available under Safety. The default-on pause protection is
+visible even when no backup is configured. You can also set up the separate keyword helper:
 
 **Video checker** decides each video against your rules. Decision models are built for
 exactly this kind of yes/no question and answer in a fraction of a second.
 
 | Provider | What to enter | Cost |
 | --- | --- | --- |
-| **Clef** by Cloudflare (recommended) | Your Cloudflare account ID and an API token with Workers AI permission (dash.cloudflare.com → AI → Workers AI → Use REST API). Model `clef`, or `clef-flash` for speed. | Workers AI includes 10,000 free "neurons" a day on the free plan, enough for several thousand video checks by our estimate (videos are checked in batches and cached). Then $0.24 per million input tokens. |
-| **Jev** by TypeSafe, via OpenRouter | An OpenRouter API key. Model `typesafe/jev-1.14`. | $0.042 per million input tokens, so pennies, but OpenRouter needs credit. No free tier. |
+| **Clef Flash via OpenRouter (recommended)** | An OpenRouter API key. Default model `cloudflare/clef-flash`; change it under Advanced: model. | Requires OpenRouter credit. [Current pricing](https://openrouter.ai/cloudflare/clef-flash). |
+| **Direct Cloudflare Clef** | Cloudflare account ID and a Workers AI API token. Default model `clef`; `clef-flash` is also available. | Limited daily free allowance, then a paid plan is needed. The allowance is compute usage, not a number of video checks. [Current pricing](https://developers.cloudflare.com/workers-ai/platform/pricing/). |
+| **Jev** by TypeSafe, via OpenRouter | Choose the OpenRouter Decisions checker and enter `typesafe/jev-1.14` under Advanced: model. Existing Jev setups are kept. | Requires OpenRouter credit; model pricing applies. |
 | Claude (Anthropic) | An API key from console.anthropic.com. Default `claude-haiku-5-5`. Can also look at thumbnails. | Paid per use. |
 | OpenAI-compatible | Base URL + model + key: OpenAI, Gemini, Groq, OpenRouter chat models, or Ollama on your home network. Can also look at thumbnails. | Depends on provider. |
+
+The recommended decision checker uses title, channel and available page text; it does not
+send thumbnails in this release. Clef-family requests are split into conservative small
+states because the Cloudflare serving path can truncate long text. Rules are never silently
+cut to fit: an oversized single check stays hidden and reports an actionable error. These
+checks assess metadata, not the entire video.
 
 **Keyword helper** turns your rules into a long keyword list. It only ever sees your rules.
 Tap "Use Gemini (free tier)" and paste a key from aistudio.google.com, or use Claude or any

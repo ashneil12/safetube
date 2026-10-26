@@ -13,21 +13,49 @@ import org.json.JSONObject
 class DecisionModelClassifier(
     private val config: ProviderConfig,
     private val endpointOverride: String? = null,
+    private val transport: (String, Map<String, String>, String) -> Http.Response = { url, headers, body ->
+        Http.request(url, method = "POST", headers = headers, body = body)
+    },
 ) : VideoClassifier {
 
     override fun classify(videos: List<VideoInfo>, rules: String): List<Score> {
         if (videos.isEmpty()) return emptyList()
-        val response = Http.request(
-            endpoint(),
-            method = "POST",
-            headers = mapOf("Authorization" to "Bearer ${config.apiKey.trim()}"),
-            body = buildRequest(videos, rules).toString(),
-        )
-        if (response.code !in 200..299) {
-            throw ClassifierException("${config.type.label} returned ${response.code}: ${response.body.take(300)}")
+        // Preflight every group before any transport: never silently drop part of a parent's rules.
+        val groups = requestGroups(videos, rules)
+        return groups.flatMap { group ->
+            val response = transport(
+                endpoint(), mapOf("Authorization" to "Bearer ${config.apiKey.trim()}"),
+                buildRequest(group, rules).toString(),
+            )
+            if (response.code !in 200..299) {
+                throw ClassifierException("${config.type.label} returned ${response.code}: ${response.body.take(300)}")
+            }
+            parseAnswers(response.body, group)
         }
-        return parseAnswers(response.body, videos)
     }
+
+    internal fun requestGroups(videos: List<VideoInfo>, rules: String): List<List<VideoInfo>> {
+        if (!config.needsBoundedDecisionState) return listOf(videos)
+        val groups = ArrayList<List<VideoInfo>>()
+        var current = emptyList<VideoInfo>()
+        for (video in videos) {
+            val candidate = current + video
+            if (stateBytes(candidate, rules) <= MAX_CLEF_STATE_BYTES) {
+                current = candidate
+            } else {
+                if (current.isNotEmpty()) groups += current
+                current = listOf(video)
+                if (stateBytes(current, rules) > MAX_CLEF_STATE_BYTES) {
+                    throw ClassifierException("These rules and video details are too long for Clef to check safely. Shorten your hide, Only show or clarification rules, or choose another decision model.")
+                }
+            }
+        }
+        if (current.isNotEmpty()) groups += current
+        return groups
+    }
+
+    internal fun stateBytes(videos: List<VideoInfo>, rules: String): Int =
+        buildRequest(videos, rules).getJSONObject("state").toString().toByteArray(Charsets.UTF_8).size
 
     internal fun endpoint(): String = endpointOverride ?: when (config.type) {
         ProviderType.CLEF -> "https://api.cloudflare.com/client/v4/accounts/${config.accountId.trim()}" +
@@ -104,4 +132,9 @@ class DecisionModelClassifier(
     }
 
     private fun questionKey(i: Int) = "v${i + 1}"
+
+    companion object {
+        // Conservative byte budget below the serving path's roughly 2,000 text-token cap.
+        internal const val MAX_CLEF_STATE_BYTES = 1800
+    }
 }

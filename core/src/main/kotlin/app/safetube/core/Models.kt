@@ -60,6 +60,8 @@ enum class ProviderType(val label: String) {
     CLEF("Clef (Cloudflare)"),
     /** TypeSafe's Jev decision model through OpenRouter's Decisions API. */
     JEV("Jev (OpenRouter)"),
+    /** Any decision model on OpenRouter, with Clef Flash as the simple starting option. */
+    OPENROUTER_DECISIONS("OpenRouter decisions"),
     ANTHROPIC("Claude (Anthropic)"),
     /** OpenAI, Gemini, OpenRouter chat models, Groq, Ollama and anything else that speaks /chat/completions. */
     OPENAI_COMPATIBLE("OpenAI-compatible"),
@@ -79,21 +81,26 @@ data class ProviderConfig(
         get() = when (type) {
             ProviderType.NONE -> false
             ProviderType.CLEF -> apiKey.isNotBlank() && accountId.isNotBlank()
-            ProviderType.JEV, ProviderType.ANTHROPIC -> apiKey.isNotBlank()
+            ProviderType.JEV, ProviderType.OPENROUTER_DECISIONS, ProviderType.ANTHROPIC -> apiKey.isNotBlank()
             // Local servers (Ollama etc.) often need no key.
             ProviderType.OPENAI_COMPATIBLE -> baseUrl.isNotBlank() && model.isNotBlank()
         }
 
     /** Decision models answer typed questions instead of writing text. */
-    val isDecisionModel: Boolean get() = type == ProviderType.CLEF || type == ProviderType.JEV
+    val isDecisionModel: Boolean get() = type == ProviderType.CLEF || type == ProviderType.JEV || type == ProviderType.OPENROUTER_DECISIONS
 
-    /** Thumbnails are only sent to chat models; the decision-model APIs don't take image links. */
+    /** This client sends thumbnails only to chat providers; decision requests here are text-only. */
     val usesThumbnails: Boolean get() = sendThumbnails && !isDecisionModel
+
+    /** Cloudflare's serving path can silently drop text beyond roughly 2,000 tokens. */
+    val needsBoundedDecisionState: Boolean get() = type == ProviderType.CLEF ||
+        (isDecisionModel && modelOrDefault().lowercase().startsWith("cloudflare/clef"))
 
     fun modelOrDefault(): String = model.ifBlank {
         when (type) {
             ProviderType.CLEF -> DEFAULT_CLEF_MODEL
             ProviderType.JEV -> DEFAULT_JEV_MODEL
+            ProviderType.OPENROUTER_DECISIONS -> DEFAULT_OPENROUTER_DECISION_MODEL
             ProviderType.ANTHROPIC -> DEFAULT_ANTHROPIC_MODEL
             ProviderType.OPENAI_COMPATIBLE, ProviderType.NONE -> ""
         }
@@ -102,6 +109,7 @@ data class ProviderConfig(
     companion object {
         const val DEFAULT_CLEF_MODEL = "clef"
         const val DEFAULT_JEV_MODEL = "typesafe/jev-1.14"
+        const val DEFAULT_OPENROUTER_DECISION_MODEL = "cloudflare/clef-flash"
         const val DEFAULT_ANTHROPIC_MODEL = "claude-haiku-5-5"
     }
 }
@@ -131,14 +139,20 @@ data class FilterSettings(
      * Cached AI scores are only reused while this stays the same. Strictness is
      * deliberately left out: scores are cached and the threshold is applied on read.
      */
-    fun aiConfigHash(): String = Hashing.sha256(
+    fun aiConfigHash(): String = configHash(includeStateVersion = true)
+
+    /** Preserve a 0.6.0 outage across request-format upgrades; only policy/provider changes clear it. */
+    fun outageConfigHash(): String = configHash(includeStateVersion = false)
+
+    private fun configHash(includeStateVersion: Boolean): String = Hashing.sha256(
         listOf(
             effectiveRules(),
-            provider.cacheIdentity(),
-            fallbackProvider.cacheIdentity(),
+            provider.cacheIdentity(includeStateVersion),
+            fallbackProvider.cacheIdentity(includeStateVersion),
             PromptBuilder.VERSION.toString(),
         ).joinToString("\u0000")
     ).take(16)
 }
 
-private fun ProviderConfig.cacheIdentity(): String = listOf(type.name, baseUrl.trim(), modelOrDefault(), accountId.trim(), Hashing.sha256(apiKey), usesThumbnails.toString()).joinToString("\u0000")
+private fun ProviderConfig.cacheIdentity(includeStateVersion: Boolean): String = listOf(type.name, baseUrl.trim(), modelOrDefault(), accountId.trim(), Hashing.sha256(apiKey), usesThumbnails.toString()).joinToString("\u0000") +
+    if (includeStateVersion && needsBoundedDecisionState) "\u0000clef-state-v1" else ""

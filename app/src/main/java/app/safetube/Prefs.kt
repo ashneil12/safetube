@@ -40,9 +40,9 @@ class Prefs(context: Context) {
     /** A checker outage survives relaunches, until fresh recovery or changed AI configuration. */
     var aiUnavailable: Boolean
         get() = blockOnAiFailure && sp.getBoolean("aiUnavailable", false) &&
-            sp.getString("aiUnavailableHash", "") == filterSettings().aiConfigHash()
+            sp.getString("aiUnavailableHash", "") == filterSettings().outageConfigHash()
         set(v) = sp.edit().putBoolean("aiUnavailable", v)
-            .putString("aiUnavailableHash", filterSettings().aiConfigHash()).apply()
+            .putString("aiUnavailableHash", filterSettings().outageConfigHash()).apply()
 
     var keywords: String
         get() = sp.getString("keywords", DEFAULT_KEYWORDS) ?: DEFAULT_KEYWORDS
