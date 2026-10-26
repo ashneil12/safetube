@@ -324,6 +324,9 @@ function check(name, cond) {
   await lockedBoot.waitForTimeout(100);
   check('native failure latch remains locked through a full page reload', await lockedBoot.isVisible('#st-overlay') && await lockedBoot.locator('html[data-st-ai-unavailable]').count() === 1);
   check('persisted outage retries the directly opened video without recommendation cards', await lockedBoot.evaluate(() => window.__retrySubmitted.some((v) => v.id === 'WHEELSBUS01')));
+  await lockedBoot.evaluate(() => { window.__safetube.apply({ WHEELSBUS01: 'allow' }); for (let i = 0; i < 5; i++) window.__safetube.scan(); });
+  await lockedBoot.waitForTimeout(100);
+  check('local allowances while locked are retried with backoff rather than a submit loop', await lockedBoot.evaluate(() => window.__retrySubmitted.length === 1));
   await lockedBoot.evaluate(() => { window.__safetube.setAiUnavailable(false); window.__safetube.apply({ WHEELSBUS01: 'allow' }); });
   check('fresh successful retry can unlock an isolated direct watch page', await lockedBoot.locator('#st-overlay').count() === 0 && await lockedBoot.locator('#player').isVisible());
   await lockedBoot.close();

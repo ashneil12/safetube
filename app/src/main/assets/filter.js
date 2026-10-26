@@ -881,7 +881,8 @@
       delete inFlight[id];
       if (v === 'allow' || v === 'block') {
         verdicts[id] = v;
-        delete retryAt[id];
+        if (aiUnavailable) retryAt[id] = now + RETRY_MS;
+        else delete retryAt[id];
       } else {
         retryAt[id] = now + RETRY_MS;
       }
