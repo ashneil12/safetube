@@ -145,6 +145,19 @@ class FilterBridge(
             } catch (e: Exception) {
                 send(videos.map { Decision(it.id, Verdict.UNKNOWN, DecisionSource.ERROR, reason = e.toString()) })
             }
+            if (retry && !hadFailure && !hadFreshAi && version == prefs.version && generation == pageGeneration) {
+                hadFreshAi = engine.probeAiAvailability(videos, settings)
+                if (!hadFreshAi) {
+                    synchronized(stateLock) {
+                        if (version == prefs.version && generation == pageGeneration) {
+                            hadFailure = true
+                            aiUnavailable = true
+                            prefs.aiUnavailable = true
+                            failureRevision++
+                        }
+                    }
+                }
+            }
             synchronized(stateLock) {
                 if (version == prefs.version && generation == pageGeneration && !hadFailure && hadFreshAi && failureRevision == startFailure) {
                     aiUnavailable = false

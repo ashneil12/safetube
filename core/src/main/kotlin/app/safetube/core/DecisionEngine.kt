@@ -29,6 +29,24 @@ class DecisionEngine(
     }
 
     /**
+     * Checks recovery when every visible video has a local decision. The probe uses a real
+     * video's metadata and the saved AI policy, but never changes local overrides or emits
+     * its classification to the page. An empty/failed response cannot restore access.
+     */
+    fun probeAiAvailability(input: List<VideoInfo>, settings: FilterSettings): Boolean {
+        val valid = input.filter { VideoInfo.isValidId(it.id) }
+        val video = valid.firstOrNull { it.title.isNotBlank() } ?: valid.firstOrNull()?.let { raw ->
+            try { metadata?.fetch(raw.id)?.mergeInto(raw) } catch (e: Exception) { null }
+        } ?: return false
+        if (video.title.isBlank()) return false
+        return try {
+            DecisionEngine(InMemoryVerdictStore(), classifierFactory, metadata = null)
+                .decide(listOf(video), settings.copy(blockedKeywords = emptyList(), blockedChannels = emptyList()), bypassCache = true)
+                .singleOrNull()?.let { it.freshAi && it.source == DecisionSource.AI } == true
+        } catch (e: Exception) { false }
+    }
+
+    /**
      * Same as [decide], but hands results over as soon as they're known: everything that needs
      * no AI first, then each AI batch as it comes back. Returns once every video has been sent.
      * [emit] may be called from several threads at once when [aiPool] is set.

@@ -239,4 +239,40 @@ class DecisionEngineTest {
         assertEquals(DecisionSource.CHANNEL, d.source)
     }
 
+    @Test
+    fun `outage probe checks fresh AI while preserving all local decisions`() {
+        val store = InMemoryVerdictStore()
+        store.setOverride(bus.id, Verdict.ALLOW)
+        val fake = FakeClassifier(mapOf(bus.id to 0.99))
+        val checker = engine(store, fake)
+        val settings = aiSettings.copy(blockedKeywords = listOf("bus"), blockedChannels = listOf(bus.channel))
+        assertEquals(DecisionSource.PARENT, checker.decide(listOf(bus), settings).single().source)
+        assertEquals(0, fake.calls)
+        assertTrue(checker.probeAiAvailability(listOf(bus), settings))
+        assertEquals(1, fake.calls)
+        assertEquals(Verdict.ALLOW, store.override(bus.id))
+        assertTrue(store.scores.isEmpty())
+        assertTrue(store.hidden.isEmpty())
+    }
+
+    @Test
+    fun `outage probe cannot succeed from absent title missing scores or unconfigured AI`() {
+        val fake = FakeClassifier(emptyMap())
+        val checker = engine(InMemoryVerdictStore(), fake)
+        assertTrue(!checker.probeAiAvailability(listOf(VideoInfo(bus.id)), aiSettings))
+        assertEquals(0, fake.calls)
+        assertTrue(!checker.probeAiAvailability(listOf(bus), aiSettings))
+        assertTrue(!checker.probeAiAvailability(listOf(bus), FilterSettings()))
+    }
+
+    @Test
+    fun `outage probe uses configured fallback and fetched real metadata`() {
+        val fallback = FakeClassifier(mapOf(bus.id to 0.99))
+        val primary = FakeClassifier(emptyMap())
+        val checker = DecisionEngine(InMemoryVerdictStore(), { if (it.type == ProviderType.JEV) fallback else primary }, MetadataFetcher { bus })
+        assertTrue(checker.probeAiAvailability(listOf(VideoInfo(bus.id)), aiSettings.copy(
+            fallbackProvider = ProviderConfig(ProviderType.JEV, apiKey = "fallback"))))
+        assertEquals(1, fallback.calls)
+    }
+
 }
