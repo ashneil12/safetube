@@ -452,6 +452,18 @@
     OPENAI_COMPATIBLE: { name: 'Something else', desc: 'Any OpenAI-compatible service', key: 'API key' },
   };
 
+  function customDecisionModel(p) {
+    return p.type === 'OPENROUTER_DECISIONS' && p.model && p.model !== (S.defaults.models.OPENROUTER_DECISIONS || 'cloudflare/clef-flash');
+  }
+
+  function customDecisionNotice(p) {
+    return customDecisionModel(p) ? `<p class="note" data-custom-model>Using custom model: ${esc(p.model)}</p>` : '';
+  }
+
+  function checkerName(p) {
+    return customDecisionModel(p) ? 'OpenRouter · ' + p.model : PROVIDERS[p.type].name;
+  }
+
   function reasonTag(reason) {
     const r = reason || '';
     if (r.startsWith('Keyword:')) return `<span class="tag keyword">Keyword “${esc(r.slice(8).trim())}”</span>`;
@@ -549,7 +561,7 @@
         <div class="stat"><div class="k">Videos checked today</div><div class="v">${L.stats.checkedToday || 0}</div></div>
         <div class="stat"><div class="k">Hidden today</div><div class="v">${L.stats.hiddenToday || 0}</div></div>
         <div class="stat"><div class="k">Watched today</div><div class="v">${minutesText(L.stats.watchedMin || 0)}${L.stats.limitMin ? `<small> of ${minutesText(L.stats.limitMin)}</small>` : ''}</div></div>
-        <div class="stat"><div class="k">Smart checker</div><div class="v small">${esc(PROVIDERS[p.type].name)}${p.type === 'CLEF' ? ' · free' : ''}</div></div>
+        <div class="stat"><div class="k">Smart checker</div><div class="v small" data-checker-name>${esc(checkerName(p))}</div></div>
       </div>
       <div class="cols">
         <section class="card grow" id="recent">
@@ -986,6 +998,7 @@
           <summary>Other checkers</summary><div class="providers">${types.map(providerButton).join('')}</div>
         </details>
       </div>
+      <div data-custom-model-note>${customDecisionNotice(p)}</div>
       ${p.type === 'NONE' ? '' : `
       <div class="fields">
         ${p.type === 'CLEF' ? field('accountId', 'Cloudflare account ID', p.accountId) : ''}
@@ -1019,6 +1032,7 @@
     box.querySelectorAll('[data-field]').forEach((input) => input.addEventListener('change', () => {
       p[input.dataset.field] = input.value.trim();
       save('Saved');
+      if (input.dataset.field === 'model') box.querySelector('[data-custom-model-note]').innerHTML = customDecisionNotice(p);
     }));
     const resetModel = box.querySelector('[data-reset-model]');
     if (resetModel) resetModel.addEventListener('click', () => { p.model = ''; save('Recommended model restored'); checkerForm(box, { compact, fallback }); });

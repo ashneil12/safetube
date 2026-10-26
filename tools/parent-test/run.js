@@ -176,6 +176,7 @@ function fakeApp(mode) {
   await page.click('[data-next]');
   check('step 4 recommends Clef Flash via OpenRouter', (await page.getAttribute('#checker-form [data-type="OPENROUTER_DECISIONS"]', 'aria-checked')) === 'true');
   check('recommended setup needs one visible key field and no account ID', await page.locator('#checker-form [data-field]:visible').count() === 1 && await page.locator('#checker-form [data-field="accountId"]').count() === 0);
+  check('default checker has no custom model clutter', await page.locator('#checker-form [data-custom-model]').count() === 0);
   check('recommended Decisions checker has no thumbnail option', await page.locator('#checker-form [data-thumbs]').count() === 0);
   check('recommended setup explains credit and hides optional backup by default', (await page.textContent('#checker-form')).includes('Requires OpenRouter credit') && !(await page.isVisible('#backup-form')) && await page.isVisible('[data-switch="blockOnAiFailure"]'));
   await shot(page, '03a-simple-checker-default');
@@ -388,10 +389,21 @@ function fakeApp(mode) {
     await page.click('[data-page="checker"]');
     const existing = await page.evaluate(() => window.__settings);
     check(`${type} settings and existing backup stay unchanged on opening`, JSON.stringify(existing.provider) === JSON.stringify(provider) && JSON.stringify(existing.fallbackProvider) === JSON.stringify(fallbackProvider) && await page.isVisible('#backup-form') && !(await log(page)).includes('save'));
+    if (type === 'CLEF') {
+      await page.click('[data-page="overview"]');
+      check('overview does not imply unlimited free Cloudflare checks', (await page.textContent('[data-checker-name]')) === 'Direct Cloudflare');
+      await page.click('[data-page="checker"]');
+    }
     if (type === 'OPENROUTER_DECISIONS') {
       await page.fill('#form [data-field="model"]', 'typesafe/jev-1.14');
       await page.dispatchEvent('#form [data-field="model"]', 'change');
-      await page.click('[data-page="overview"]'); await page.click('[data-page="checker"]');
+      await page.locator('#form [data-model-options]').evaluate((e) => { e.open = false; });
+      check('actual custom model stays visible outside advanced controls', await page.isVisible('#form [data-custom-model]') && (await page.textContent('#form [data-custom-model]')).includes('typesafe/jev-1.14'));
+      await page.click('#form [data-type="OPENROUTER_DECISIONS"]');
+      check('clicking the selected recommended card preserves the custom model', await page.evaluate(() => window.__settings.provider.model === 'typesafe/jev-1.14'));
+      await page.click('[data-page="overview"]');
+      check('overview names the actual OpenRouter model', (await page.textContent('[data-checker-name]')) === 'OpenRouter · typesafe/jev-1.14');
+      await page.click('[data-page="checker"]');
       check('custom OpenRouter Decisions models persist across pages', (await page.inputValue('#form [data-field="model"]')) === 'typesafe/jev-1.14');
       await page.click('#form [data-reset-model]');
       check('reset restores the native recommended model without changing the key', await page.evaluate(() => window.__settings.provider.model === '' && window.__settings.provider.apiKey === 'existing-key') && (await page.getAttribute('#form [data-field="model"]', 'placeholder')) === 'cloudflare/clef-flash');
