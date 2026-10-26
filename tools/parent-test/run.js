@@ -393,14 +393,26 @@ function fakeApp(mode) {
       await page.click('[data-page="overview"]');
       check('overview does not imply unlimited free Cloudflare checks', (await page.textContent('[data-checker-name]')) === 'Direct Cloudflare');
       await page.click('[data-page="checker"]');
+      await page.click('#form [data-type="OPENROUTER_DECISIONS"]');
+      check('changing direct Cloudflare to OpenRouter clears the Cloudflare credential', await page.evaluate(() => window.__settings.provider.type === 'OPENROUTER_DECISIONS' && window.__settings.provider.apiKey === '') && await page.inputValue('#form [data-field="apiKey"]') === '');
+      await page.fill('#form [data-field="apiKey"]', 'replacement-openrouter-key');
+      await page.dispatchEvent('#form [data-field="apiKey"]', 'change');
+      check('a new service only uses its explicitly pasted replacement key', await page.evaluate(() => window.__settings.provider.apiKey === 'replacement-openrouter-key'));
+      await page.click('#backup-form [data-type="CLEF"]');
+      check('changing a backup checker also clears credentials from another service', await page.evaluate(() => window.__settings.fallbackProvider.type === 'CLEF' && window.__settings.fallbackProvider.apiKey === ''));
+    }
+    if (type === 'JEV') {
+      await page.click('#form [data-type="OPENROUTER_DECISIONS"]');
+      check('Jev to recommended Decisions preserves the key for the same OpenRouter service', await page.evaluate(() => window.__settings.provider.type === 'OPENROUTER_DECISIONS' && window.__settings.provider.apiKey === 'existing-key'));
     }
     if (type === 'OPENROUTER_DECISIONS') {
       await page.fill('#form [data-field="model"]', 'typesafe/jev-1.14');
       await page.dispatchEvent('#form [data-field="model"]', 'change');
       await page.locator('#form [data-model-options]').evaluate((e) => { e.open = false; });
+      check('editing the model keeps the same-service API key', await page.evaluate(() => window.__settings.provider.apiKey === 'existing-key'));
       check('actual custom model stays visible outside advanced controls', await page.isVisible('#form [data-custom-model]') && (await page.textContent('#form [data-custom-model]')).includes('typesafe/jev-1.14'));
       await page.click('#form [data-type="OPENROUTER_DECISIONS"]');
-      check('clicking the selected recommended card preserves the custom model', await page.evaluate(() => window.__settings.provider.model === 'typesafe/jev-1.14'));
+      check('clicking the selected recommended card preserves the custom model', await page.evaluate(() => window.__settings.provider.model === 'typesafe/jev-1.14' && window.__settings.provider.apiKey === 'existing-key'));
       await page.click('[data-page="overview"]');
       check('overview names the actual OpenRouter model', (await page.textContent('[data-checker-name]')) === 'OpenRouter · typesafe/jev-1.14');
       await page.click('[data-page="checker"]');

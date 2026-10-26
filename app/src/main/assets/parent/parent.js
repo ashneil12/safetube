@@ -1023,9 +1023,12 @@
       </div>`}`}`;
     box.querySelectorAll('[data-type]').forEach((b) => b.addEventListener('click', () => {
       if (p.type !== b.dataset.type) {
+        const openRouter = (type) => type === 'JEV' || type === 'OPENROUTER_DECISIONS';
+        const sameKeyService = openRouter(p.type) && openRouter(b.dataset.type);
+        if (!sameKeyService) p.apiKey = '';
         p.type = b.dataset.type;
         p.model = ''; // a model name for one provider means nothing to another
-        save();
+        save(!sameKeyService && p.type !== 'NONE' ? 'Paste your ' + PROVIDERS[p.type].key + '.' : '');
       }
       checkerForm(box, { compact, fallback });
     }));
