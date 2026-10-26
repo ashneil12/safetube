@@ -291,4 +291,49 @@ class DecisionEngineTest {
         assertEquals(0, fake.calls)
     }
 
+    @Test
+    fun `titleless video skips text primary and can use a vision fallback`() {
+        val text = FakeClassifier(mapOf(bus.id to 0.0))
+        val vision = FakeClassifier(mapOf(bus.id to 0.1))
+        val settings = aiSettings.copy(provider = ProviderConfig(ProviderType.CLEF, apiKey = "key", accountId = "account"),
+            fallbackProvider = ProviderConfig(ProviderType.ANTHROPIC, apiKey = "key"))
+        val checker = DecisionEngine(InMemoryVerdictStore(), { if (it.type == ProviderType.CLEF) text else vision }, null)
+        val decision = checker.decide(listOf(VideoInfo(bus.id)), settings).single()
+        assertEquals(Verdict.ALLOW, decision.verdict)
+        assertTrue(decision.freshAi)
+        assertEquals(0, text.calls)
+        assertEquals(1, vision.calls)
+    }
+
+    @Test
+    fun `failed vision check cannot send titleless video to text fallback`() {
+        var visionCalls = 0
+        val vision = object : VideoClassifier {
+            override fun classify(videos: List<VideoInfo>, rules: String): List<Score> {
+                visionCalls++
+                throw ClassifierException("Quota exhausted")
+            }
+        }
+        val text = FakeClassifier(mapOf(bus.id to 0.0))
+        val settings = aiSettings.copy(fallbackProvider = ProviderConfig(ProviderType.CLEF, apiKey = "key", accountId = "account"))
+        val checker = DecisionEngine(InMemoryVerdictStore(), { if (it.type == ProviderType.CLEF) text else vision }, null)
+        val decision = checker.decide(listOf(VideoInfo(bus.id)), settings).single()
+        assertEquals(Verdict.UNKNOWN, decision.verdict)
+        assertEquals(DecisionSource.ERROR, decision.source)
+        assertTrue(!decision.freshAi)
+        assertEquals(1, visionCalls)
+        assertEquals(0, text.calls)
+    }
+
+    @Test
+    fun `successful vision primary checks titleless video without text fallback`() {
+        val vision = FakeClassifier(mapOf(bus.id to 0.0))
+        val text = FakeClassifier(mapOf(bus.id to 0.0))
+        val settings = aiSettings.copy(fallbackProvider = ProviderConfig(ProviderType.CLEF, apiKey = "key", accountId = "account"))
+        val checker = DecisionEngine(InMemoryVerdictStore(), { if (it.type == ProviderType.CLEF) text else vision }, null)
+        assertEquals(Verdict.ALLOW, checker.decide(listOf(VideoInfo(bus.id)), settings).single().verdict)
+        assertEquals(1, vision.calls)
+        assertEquals(0, text.calls)
+    }
+
 }

@@ -146,19 +146,26 @@ class DecisionEngine(
         hash: String,
     ): Map<String, Decision> {
         var failure = "AI skipped this video or returned an invalid score"
-        fun attempt(checker: VideoClassifier?, videos: List<VideoInfo>): Map<String, Score> = try {
-            checker?.classify(videos, settings.effectiveRules()).orEmpty()
-                .filter { it.p.isFinite() && it.p in 0.0..1.0 && videos.any { v -> v.id == it.id } }
-                .associateBy { it.id }
-        } catch (e: Exception) {
-            failure = e.message ?: "AI error"
-            emptyMap()
+        fun attempt(checker: VideoClassifier?, config: ProviderConfig, videos: List<VideoInfo>): Map<String, Score> {
+            val eligible = videos.filter { it.title.isNotBlank() || (config.isAiEnabled && config.usesThumbnails) }
+            if (eligible.isEmpty()) {
+                failure = "No title to check with this provider"
+                return emptyMap()
+            }
+            return try {
+                checker?.classify(eligible, settings.effectiveRules()).orEmpty()
+                    .filter { it.p.isFinite() && it.p in 0.0..1.0 && eligible.any { v -> v.id == it.id } }
+                    .associateBy { it.id }
+            } catch (e: Exception) {
+                failure = e.message ?: "AI error"
+                emptyMap()
+            }
         }
-        val got = attempt(classifier, batch).toMutableMap()
+        val got = attempt(classifier, settings.provider, batch).toMutableMap()
         val missing = batch.filter { it.id !in got }
         if (missing.isNotEmpty() && settings.fallbackProvider.isAiEnabled) {
             val fallback = try { classifierFactory(settings.fallbackProvider) } catch (e: Exception) { null }
-            got.putAll(attempt(fallback, missing))
+            got.putAll(attempt(fallback, settings.fallbackProvider, missing))
         }
         return batch.associate { v ->
             val score = got[v.id]
