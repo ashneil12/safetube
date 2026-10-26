@@ -26,7 +26,14 @@ final class Prefs {
         set { sp.set(newValue, forKey: "exceptions") }
     }
     var aiUnavailable: Bool {
-        get { blockOnAiFailure && string("aiUnavailableHash", "") == filterSettings().aiConfigHash() }
+        get {
+            let settings = filterSettings()
+            if settings.mustBlockForAiConfiguration {
+                sp.set(settings.aiConfigHash(), forKey: "aiUnavailableHash")
+                return true
+            }
+            return settings.blockOnAiFailure && string("aiUnavailableHash", "") == settings.aiConfigHash()
+        }
         set {
             if newValue { sp.set(filterSettings().aiConfigHash(), forKey: "aiUnavailableHash") }
             else { sp.removeObject(forKey: "aiUnavailableHash") }
@@ -341,7 +348,7 @@ final class Prefs {
 
     func pageConfigJson(aiUnavailable: Bool = false) -> String {
         JSON.string([
-            "aiUnavailable": aiUnavailable,
+            "aiUnavailable": aiUnavailable || self.aiUnavailable,
             "hideShorts": hideShorts,
             "hideComments": hideComments,
             "blockMenu": true,

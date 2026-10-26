@@ -187,6 +187,18 @@ public struct FilterSettings {
         self.blockOnAiFailure = blockOnAiFailure
     }
 
+    /// Whether checking is required, including a selected provider with incomplete credentials.
+    public var requiresAi: Bool {
+        !allowedContent.isBlank ||
+            (!effectiveRules().isBlank && (provider.type != .none || fallbackProvider.type != .none)) ||
+            (provider.type != .none && !provider.isAiEnabled)
+    }
+
+    /// Lock before any cache or parent allowance is shown when no configured checker can run.
+    public var mustBlockForAiConfiguration: Bool {
+        blockOnAiFailure && requiresAi && !provider.isAiEnabled && !fallbackProvider.isAiEnabled
+    }
+
     public func effectiveRules() -> String {
         var parts: [String] = []
         if !rules.isBlank { parts.append("Hide content matching: " + rules.trimmed) }

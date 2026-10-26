@@ -56,9 +56,7 @@ public final class DecisionEngine {
         var decisions: [String: Decision] = [:]
         let keywords = KeywordFilter(settings.blockedKeywords)
         let channels = ChannelBlocklist(settings.blockedChannels)
-        let aiOn = !settings.allowedContent.isBlank ||
-            (!settings.effectiveRules().isBlank && (settings.provider.type != .none || settings.fallbackProvider.type != .none)) ||
-            (settings.provider.type != .none && !settings.provider.isAiEnabled)
+        let aiOn = settings.requiresAi
         let hash = settings.aiConfigHash()
         var needAi: [VideoInfo] = []
         var byId: [String: VideoInfo] = [:]

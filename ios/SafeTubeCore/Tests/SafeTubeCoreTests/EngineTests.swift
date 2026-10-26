@@ -395,3 +395,25 @@ final class RecoveryAndRuleTests: XCTestCase {
         XCTAssertTrue(fake.seen.isEmpty)
     }
 }
+
+final class AiConfigurationProtectionTests: XCTestCase {
+    func testOnlyShowWithNoUsableCheckerPrelocksEvenIfVideoHasParentAllowance() {
+        let settings = FilterSettings(allowedContent: "Planet Coaster")
+        let store = InMemoryVerdictStore()
+        store.setOverride("aaaaaaaaaaa", .allow)
+        XCTAssertEqual(DecisionEngine(store, metadata: nil).decide([VideoInfo("aaaaaaaaaaa")], settings).first?.verdict, .allow)
+        XCTAssertTrue(settings.mustBlockForAiConfiguration)
+    }
+    func testSelectedInvalidPrimaryPrelocksWithEmptyRules() {
+        XCTAssertTrue(FilterSettings(provider: ProviderConfig(.anthropic)).mustBlockForAiConfiguration)
+    }
+    func testUsableFallbackAllowsFreshRetryWithoutPrelock() {
+        let settings = FilterSettings(provider: ProviderConfig(.anthropic), allowedContent: "Planet Coaster",
+            fallbackProvider: ProviderConfig(.jev, apiKey: "backup"))
+        XCTAssertFalse(settings.mustBlockForAiConfiguration)
+    }
+    func testKeywordOnlyAndParentOptOutDoNotPrelock() {
+        XCTAssertFalse(FilterSettings(blockedKeywords: ["violence"]).mustBlockForAiConfiguration)
+        XCTAssertFalse(FilterSettings(allowedContent: "Planet Coaster", blockOnAiFailure: false).mustBlockForAiConfiguration)
+    }
+}
