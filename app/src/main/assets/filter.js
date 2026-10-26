@@ -165,10 +165,13 @@
   var aiUnavailable = !!cfg.aiUnavailable;
   var verdicts = Object.create(null);   // id -> "allow" | "block"
   var retryAt = Object.create(null);    // id -> time we may ask again after "unknown"
+  var queuedTargets = Object.create(null); // id -> elements that made this request visible
   var queued = Object.create(null);     // id -> video waiting to be sent
   var inFlight = Object.create(null);   // id -> time sent
   var flushTimer = null;
   var scanScheduled = false;
+  var viewportScanTimer = null;
+  var PREFETCH_MARGIN_PX = 240;
   var RETRY_MS = 20000;
   var INFLIGHT_TIMEOUT_MS = 45000;
 
@@ -301,12 +304,29 @@
     return state;
   }
 
-  function need(video, priority) {
+  // visibility:hidden preserves layout, so measure after marking unknown content hidden.
+  // display:none/zero-sized content cannot be seen and does not need a speculative check.
+  function nearScreen(el) {
+    if (!el || !el.isConnected || !el.getBoundingClientRect) return false;
+    var rect = el.getBoundingClientRect();
+    var width = window.innerWidth || document.documentElement.clientWidth;
+    var height = window.innerHeight || document.documentElement.clientHeight;
+    return rect.width > 0 && rect.height > 0 &&
+      rect.bottom >= -PREFETCH_MARGIN_PX && rect.top <= height + PREFETCH_MARGIN_PX &&
+      rect.right >= -PREFETCH_MARGIN_PX && rect.left <= width + PREFETCH_MARGIN_PX;
+  }
+
+  function need(video, priority, target) {
+    if (!priority && !nearScreen(target)) return;
     var id = video.id;
     if (verdicts[id] && !aiUnavailable) return;
     var now = Date.now();
     if (inFlight[id] && now - inFlight[id] < INFLIGHT_TIMEOUT_MS) return;
     if (retryAt[id] && now < retryAt[id]) return;
+    if (target) {
+      var targets = queuedTargets[id] || (queuedTargets[id] = []);
+      if (targets.indexOf(target) < 0) targets.push(target);
+    }
     var prev = queued[id];
     if (!prev || (!prev.title && video.title)) queued[id] = video;
     scheduleFlush(priority ? 0 : 80);
@@ -322,8 +342,15 @@
 
   function flush() {
     flushTimer = null;
-    var batch = Object.keys(queued).map(function (k) { return queued[k]; });
+    // A fast scroll or recycled card can remove demand during the batching delay.
+    var watchId = currentWatchId();
+    var batch = Object.keys(queued).filter(function (id) {
+      return id === watchId || (queuedTargets[id] || []).some(function (target) {
+        return target.getAttribute('data-st-id') === id && nearScreen(target);
+      });
+    }).map(function (id) { return queued[id]; });
     queued = Object.create(null);
+    queuedTargets = Object.create(null);
     if (!batch.length) return;
     var now = Date.now();
     batch.forEach(function (v) { inFlight[v.id] = now; });
@@ -379,13 +406,16 @@
       }
       return;
     }
-    if (mark(card, id) === 'pending') need(describe(card, link, id), false);
+    if (mark(card, id) === 'pending') {
+      var target = nearScreen(card) ? card : link;
+      need(describe(card, link, id), false, target);
+    }
   }
 
   function scanLink(a) {
     var lid = idFromUrl(a.getAttribute('href'));
     if (!lid) { if (a.getAttribute('data-st') !== 'allow') a.setAttribute('data-st', 'allow'); return; }
-    if (mark(a, lid) === 'pending') need(describe(a.closest(CARD_SEL) || a, a, lid), false);
+    if (mark(a, lid) === 'pending') need(describe(a.closest(CARD_SEL) || a, a, lid), false, a);
   }
 
   // Elements added or changed since the last scan; null means "look everywhere".
@@ -395,6 +425,16 @@
     if (scanScheduled) return;
     scanScheduled = true;
     (window.requestAnimationFrame || setTimeout)(function () { scan(false); }, 16);
+  }
+
+  // Scroll events also bubble from YouTube's nested lists. Coalesce bursts into at
+  // most one full demand scan every 100ms, including on continuous scrolling.
+  function scheduleViewportScan() {
+    if (viewportScanTimer !== null) return;
+    viewportScanTimer = setTimeout(function () {
+      viewportScanTimer = null;
+      scan();
+    }, 100);
   }
 
   /**
@@ -899,6 +939,7 @@
     retryAt = Object.create(null);
     inFlight = Object.create(null);
     queued = Object.create(null);
+    queuedTargets = Object.create(null);
     if (newCfg) {
       cfg = Object.assign(cfg, typeof newCfg === 'string' ? JSON.parse(newCfg) : newCfg);
       if (cfg.aiUnavailable) aiUnavailable = true;
@@ -922,6 +963,8 @@
   new MutationObserver(onMutations).observe(document, {
     childList: true, subtree: true, attributes: true, attributeFilter: ['href']
   });
+  window.addEventListener('scroll', scheduleViewportScan, true);
+  window.addEventListener('resize', scheduleViewportScan, true);
   ['yt-navigate-start', 'yt-navigate-finish', 'state-navigatestart', 'state-navigateend', 'popstate', 'hashchange']
     .forEach(function (ev) { window.addEventListener(ev, function () { scan(); }, true); });
   ['pushState', 'replaceState'].forEach(function (fn) {
