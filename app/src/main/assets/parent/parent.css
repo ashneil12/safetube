@@ -331,3 +331,6 @@ details.more summary { cursor: pointer; font-weight: 700; color: var(--teal); fo
 
 .side .presets { grid-template-columns: minmax(0, 1fr); }
 .side .preset { min-width: 0; }
+
+.recommended-provider { margin-top: 16px; }
+.recommended-provider .provider { width: 100%; }

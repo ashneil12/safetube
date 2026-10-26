@@ -375,7 +375,7 @@
   }
 
   function setupChecker() {
-    if (S.settings.provider.type === 'NONE') S.settings.provider.type = 'CLEF';
+    if (S.settings.provider.type === 'NONE') S.settings.provider.type = 'OPENROUTER_DECISIONS';
     app.innerHTML = `
       <div class="setup">
         ${setupSide(4)}
@@ -390,11 +390,11 @@
           </div>
         </div>
       </div>`;
-    app.querySelector('#checker-form').insertAdjacentHTML('afterend', '<section class="card"><h2>Backup &amp; safety</h2><div id="backup-form"></div><div id="safety-control"></div></section>');
+    app.querySelector('#checker-form').insertAdjacentHTML('afterend', backupSection());
     checkerForm(app.querySelector('#checker-form'), { compact: true });
     backupControls(app);
     const finish = (keepChecker) => {
-      const configured = (p) => p && (p.type === 'OPENAI_COMPATIBLE' ? !!(p.model && p.baseUrl) : p.type === 'CLEF' ? !!(p.apiKey && p.accountId) : ['JEV', 'ANTHROPIC'].includes(p.type) && !!p.apiKey);
+      const configured = (p) => p && (p.type === 'OPENAI_COMPATIBLE' ? !!(p.model && p.baseUrl) : p.type === 'CLEF' ? !!(p.apiKey && p.accountId) : ['OPENROUTER_DECISIONS', 'JEV', 'ANTHROPIC'].includes(p.type) && !!p.apiKey);
       if (S.settings.allowedContent && !((keepChecker && configured(S.settings.provider)) || configured(S.settings.fallbackProvider))) {
         app.querySelector('#checker-error').textContent = 'Only show needs a configured smart checker. Enter the primary or backup credentials before finishing.';
         const input = app.querySelector('#checker-form [data-field="apiKey"]');
@@ -443,13 +443,26 @@
 
   const PROVIDERS = {
     NONE: { name: 'Off', desc: 'Keywords and blocks only' },
-    CLEF: { name: 'Clef', desc: 'Cloudflare · free daily allowance · very fast', badge: 'Recommended',
+    OPENROUTER_DECISIONS: { name: 'Clef Flash via OpenRouter', desc: 'Paste your OpenRouter key. Requires OpenRouter credit.', badge: 'Recommended', key: 'OpenRouter API key', link: 'https://openrouter.ai/keys' },
+    CLEF: { name: 'Direct Cloudflare', desc: 'Cloudflare account and API token · limited free daily allowance',
       key: 'Cloudflare API token', link: 'https://dash.cloudflare.com/profile/api-tokens' },
-    JEV: { name: 'Jev', desc: 'Via OpenRouter · pennies, needs credit', key: 'OpenRouter API key', link: 'https://openrouter.ai/keys' },
+    JEV: { name: 'OpenRouter / Jev (existing)', desc: 'Your existing Decisions model · requires OpenRouter credit', key: 'OpenRouter API key', link: 'https://openrouter.ai/keys' },
     ANTHROPIC: { name: 'Claude', desc: 'Anthropic · can look at thumbnails too', key: 'Anthropic API key',
       link: 'https://console.anthropic.com/settings/keys' },
     OPENAI_COMPATIBLE: { name: 'Something else', desc: 'Any OpenAI-compatible service', key: 'API key' },
   };
+
+  function customDecisionModel(p) {
+    return p.type === 'OPENROUTER_DECISIONS' && p.model && p.model !== (S.defaults.models.OPENROUTER_DECISIONS || 'cloudflare/clef-flash');
+  }
+
+  function customDecisionNotice(p) {
+    return customDecisionModel(p) ? `<p class="note" data-custom-model>Using custom model: ${esc(p.model)}</p>` : '';
+  }
+
+  function checkerName(p) {
+    return customDecisionModel(p) ? 'OpenRouter · ' + p.model : PROVIDERS[p.type].name;
+  }
 
   function reasonTag(reason) {
     const r = reason || '';
@@ -548,7 +561,7 @@
         <div class="stat"><div class="k">Videos checked today</div><div class="v">${L.stats.checkedToday || 0}</div></div>
         <div class="stat"><div class="k">Hidden today</div><div class="v">${L.stats.hiddenToday || 0}</div></div>
         <div class="stat"><div class="k">Watched today</div><div class="v">${minutesText(L.stats.watchedMin || 0)}${L.stats.limitMin ? `<small> of ${minutesText(L.stats.limitMin)}</small>` : ''}</div></div>
-        <div class="stat"><div class="k">Smart checker</div><div class="v small">${esc(PROVIDERS[p.type].name)}${p.type === 'CLEF' ? ' · free' : ''}</div></div>
+        <div class="stat"><div class="k">Smart checker</div><div class="v small" data-checker-name>${esc(checkerName(p))}</div></div>
       </div>
       <div class="cols">
         <section class="card grow" id="recent">
@@ -967,21 +980,33 @@
   }
 
   // The provider picker and its fields; used on the checker page and in setup.
+  function sameCredentialOrigin(before, after) {
+    try {
+      if (!before || !before.trim() || !after || !after.trim()) return false;
+      const origin = new URL(before).origin;
+      return origin !== 'null' && origin === new URL(after).origin;
+    } catch (e) { return false; }
+  }
+
   function checkerForm(box, { compact, fallback = false } = {}) {
     ensureSettings();
     const p = fallback ? S.settings.fallbackProvider : S.settings.provider;
-    const types = compact ? ['CLEF', 'JEV', 'ANTHROPIC', 'OPENAI_COMPATIBLE'] : ['CLEF', 'JEV', 'ANTHROPIC', 'OPENAI_COMPATIBLE', 'NONE'];
+    const recommended = 'OPENROUTER_DECISIONS';
+    const types = ['CLEF', 'ANTHROPIC', 'OPENAI_COMPATIBLE', ...(p.type === 'JEV' ? ['JEV'] : []), ...(!compact ? ['NONE'] : [])];
     const info = PROVIDERS[p.type];
-    const modelHint = S.defaults.models[p.type] || 'e.g. gpt-4o-mini';
+    const modelHint = S.defaults.models[p.type] || (p.type === recommended ? 'cloudflare/clef-flash' : 'e.g. gpt-4o-mini');
     const chat = p.type === 'ANTHROPIC' || p.type === 'OPENAI_COMPATIBLE';
+    const providerButton = (t) => `<button class="provider" role="radio" data-type="${t}" aria-checked="${p.type === t}">
+      <b>${PROVIDERS[t].name}${PROVIDERS[t].badge ? ` <span class="badge">${PROVIDERS[t].badge}</span>` : ''}</b>
+      <span>${fallback && t === 'NONE' ? 'No backup checker' : PROVIDERS[t].desc}</span></button>`;
     box.innerHTML = `
-      <div class="providers" role="radiogroup" aria-label="${fallback ? 'Backup checker' : 'Video checker'}">
-        ${types.map((t) => `
-          <button class="provider" role="radio" data-type="${t}" aria-checked="${p.type === t}">
-            <b>${PROVIDERS[t].name}${PROVIDERS[t].badge ? ` <span class="badge">${PROVIDERS[t].badge}</span>` : ''}</b>
-            <span>${fallback && t === 'NONE' ? 'No backup checker' : PROVIDERS[t].desc}</span>
-          </button>`).join('')}
+      <div role="radiogroup" aria-label="${fallback ? 'Backup checker' : 'Video checker'}">
+        <div class="recommended-provider">${providerButton(recommended)}</div>
+        <details class="more" data-other-providers ${p.type !== recommended ? 'open' : ''}>
+          <summary>Other checkers</summary><div class="providers">${types.map(providerButton).join('')}</div>
+        </details>
       </div>
+      <div data-custom-model-note>${customDecisionNotice(p)}</div>
       ${p.type === 'NONE' ? '' : `
       <div class="fields">
         ${p.type === 'CLEF' ? field('accountId', 'Cloudflare account ID', p.accountId) : ''}
@@ -991,10 +1016,11 @@
       </div>
       ${info.link ? `<p class="note"><a href="#" data-link="${info.link}">Where do I find ${p.type === 'CLEF' ? 'these' : 'this'}?</a></p>` : ''}
       ${p.type === 'OPENAI_COMPATIBLE' && !chat ? '' : `
-      <details class="more">
-        <summary>More options</summary>
+      <details class="more" data-model-options ${p.model ? 'open' : ''}>
+        <summary>${p.type === recommended ? 'Advanced: model' : 'More options'}</summary>
         <div class="fields">
-          ${p.type !== 'OPENAI_COMPATIBLE' ? field('model', 'Model', p.model, modelHint) : ''}
+          ${p.type !== 'OPENAI_COMPATIBLE' ? field('model', p.type === recommended ? 'OpenRouter Decisions model' : 'Model', p.model, modelHint) : ''}
+          ${p.type === recommended ? `<p class="note wide">Recommended: ${esc(modelHint)}. Use an OpenRouter Decisions model ID here. Chat models are not supported by this checker.</p><button class="btn btn-ghost btn-small" data-reset-model>Reset to recommended model</button>` : ''}
           ${chat ? `<label class="check-row wide"><input type="checkbox" data-thumbs ${p.sendThumbnails ? 'checked' : ''}> Also look at thumbnails (catches more, costs a little more)</label>` : ''}
         </div>
       </details>`}
@@ -1005,16 +1031,28 @@
       </div>`}`}`;
     box.querySelectorAll('[data-type]').forEach((b) => b.addEventListener('click', () => {
       if (p.type !== b.dataset.type) {
+        const openRouter = (type) => type === 'JEV' || type === 'OPENROUTER_DECISIONS';
+        const sameKeyService = openRouter(p.type) && openRouter(b.dataset.type);
+        if (!sameKeyService) p.apiKey = '';
         p.type = b.dataset.type;
         p.model = ''; // a model name for one provider means nothing to another
-        save();
+        save(!sameKeyService && p.type !== 'NONE' ? 'Paste your ' + PROVIDERS[p.type].key + '.' : '');
       }
       checkerForm(box, { compact, fallback });
     }));
     box.querySelectorAll('[data-field]').forEach((input) => input.addEventListener('change', () => {
-      p[input.dataset.field] = input.value.trim();
-      save('Saved');
+      const value = input.value.trim();
+      const changedService = input.dataset.field === 'baseUrl' && !sameCredentialOrigin(p.baseUrl, value);
+      if (changedService) {
+        p.apiKey = '';
+        box.querySelector('[data-field="apiKey"]').value = '';
+      }
+      p[input.dataset.field] = value;
+      save(changedService ? 'Paste the API key for this service.' : 'Saved');
+      if (input.dataset.field === 'model') box.querySelector('[data-custom-model-note]').innerHTML = customDecisionNotice(p);
     }));
+    const resetModel = box.querySelector('[data-reset-model]');
+    if (resetModel) resetModel.addEventListener('click', () => { p.model = ''; save('Recommended model restored'); checkerForm(box, { compact, fallback }); });
     const thumbs = box.querySelector('[data-thumbs]');
     if (thumbs) thumbs.addEventListener('change', () => { p.sendThumbnails = thumbs.checked; save('Saved'); });
     const link = box.querySelector('[data-link]');
@@ -1040,8 +1078,13 @@
       placeholder="${esc(placeholder || '')}" autocomplete="off" autocapitalize="off" spellcheck="false"></label>`;
   }
 
+  function backupSection() {
+    return '<section class="card"><h2>Safety</h2><div id="safety-control"></div><details class="more" data-backup><summary>Optional backup checker</summary><p class="note">Try a separate provider or model if the primary checker fails or runs out.</p><div id="backup-form"></div></details></section>';
+  }
+
   function backupControls(root) {
     ensureSettings();
+    root.querySelector('[data-backup]').open = S.settings.fallbackProvider.type !== 'NONE';
     checkerForm(root.querySelector('#backup-form'), { fallback: true });
     root.querySelector('#safety-control').innerHTML = switchRow('blockOnAiFailure', 'Pause YouTube if checks run out', 'Recommended. If both checkers fail, all of YouTube is locked, including previously allowed videos, until a successful retry or a parent changes settings. If off, unchecked videos still stay hidden.');
     wireSwitches(root.querySelector('#safety-control'));
@@ -1053,7 +1096,7 @@
         <div><h1>Smart checker</h1><div class="sub">An AI reads each video’s title and channel against your rules. Optional: keywords and blocks work without it.</div></div>
       </div>
       <div class="cols">
-        <div class="grow"><section class="card"><h2>Video checker</h2><div id="form"></div></section><section class="card"><h2>Backup checker</h2><p class="note">Uses a separate provider or model if the first checker fails or runs out.</p><div id="backup-form"></div><div id="safety-control"></div></section></div>
+        <div class="grow"><section class="card"><h2>Video checker</h2><div id="form"></div></section>${backupSection()}</div>
         <div class="side">
           <section class="card" id="helper"></section>
           <section class="card dark" style="display: flex; gap: 14px">
@@ -1098,10 +1141,13 @@
         <div class="chips"><button class="btn btn-primary btn-small" data-done>Done</button></div>`}`;
     const on = (sel, fn) => { const el = box.querySelector(sel); if (el) el.addEventListener('click', fn); };
     on('[data-edit]', () => {
-      if (h.type === 'NONE') { h.type = 'OPENAI_COMPATIBLE'; h.baseUrl = ''; h.model = ''; }
+      if (h.type === 'NONE') { h.type = 'OPENAI_COMPATIBLE'; h.apiKey = ''; h.baseUrl = ''; h.model = ''; }
       helperCard(box, true);
     });
     on('[data-gemini]', () => {
+      if (h.type !== 'OPENAI_COMPATIBLE' || !sameCredentialOrigin(h.baseUrl, S.defaults.geminiBaseUrl)) {
+        h.apiKey = ''; toast('Paste your Gemini API key.');
+      }
       h.type = 'OPENAI_COMPATIBLE';
       h.baseUrl = S.defaults.geminiBaseUrl;
       h.model = S.defaults.geminiModel;
@@ -1116,8 +1162,18 @@
     const sel = box.querySelector('[data-htype]');
     if (sel) sel.addEventListener('change', () => {
       box.querySelectorAll('[data-h]').forEach((i) => { h[i.dataset.h] = i.value.trim(); });
+      if (h.type !== sel.value) { h.apiKey = ''; toast('Paste the API key for this helper service.'); }
       h.type = sel.value;
       helperCard(box, true);
+    });
+    const helperUrl = box.querySelector('[data-h="baseUrl"]');
+    if (helperUrl) helperUrl.addEventListener('change', () => {
+      const value = helperUrl.value.trim();
+      if (!sameCredentialOrigin(h.baseUrl, value)) {
+        h.apiKey = ''; box.querySelector('[data-h="apiKey"]').value = '';
+        toast('Paste the API key for this helper service.');
+      }
+      h.baseUrl = value;
     });
     const link = box.querySelector('[data-link]');
     if (link) link.addEventListener('click', (e) => { e.preventDefault(); B.openLink(link.dataset.link); });

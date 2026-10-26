@@ -34,12 +34,12 @@ function fakeApp(mode) {
   let unlocked = false;
   window.SafeTubeParent = {
     state: () => JSON.stringify({
-      mode, pinLength: 4, version: '0.2.0',
+      mode, pinLength: 4, version: '0.6.1',
       current: mode === 'unlock' ? { videoId: 'WHEELSBUS01', channelRef: null } : null,
       block: mode === 'block' ? { kind: 'channel', title: 'Monster Trucks', channel: 'Big Wheel Bros' } : null,
       settings: unlocked || mode === 'setup' ? window.__settings : null,
       defaults: { geminiBaseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', geminiModel: 'gemini-2.5-flash',
-        models: { CLEF: 'clef', JEV: 'typesafe/jev-1.14', ANTHROPIC: 'claude-haiku-5-5' } },
+        models: { OPENROUTER_DECISIONS: 'cloudflare/clef-flash', CLEF: 'clef', JEV: 'typesafe/jev-1.14', ANTHROPIC: 'claude-haiku-5-5' } },
     }),
     lists: () => JSON.stringify({
       stats: { checkedToday: 186, hiddenToday: 14, watchedMin: 72, limitMin: 60, timeUp: 'limit' },
@@ -100,7 +100,7 @@ function fakeApp(mode) {
   const shots = path.join(__dirname, 'screenshots');
   if (SHOTS) fs.mkdirSync(shots, { recursive: true });
 
-  async function open(mode, viewport) {
+  async function open(mode, viewport, overrides) {
     const page = await browser.newPage({ viewport: viewport || { width: 1280, height: 800 } });
     page.errors = [];
     page.on('pageerror', (e) => page.errors.push(String(e)));
@@ -112,11 +112,13 @@ function fakeApp(mode) {
       if (r.status() >= 400 && u.startsWith('http://127.0.0.1') && !u.endsWith('/favicon.ico')) page.errors.push(r.status() + ' ' + u);
     });
     await page.addInitScript(fakeApp, mode);
+    if (overrides) await page.addInitScript((o) => Object.assign(window.__settings, o), overrides);
     await page.goto(url);
     await page.waitForTimeout(150);
     return page;
   }
-  const type = async (page, digits) => { for (const d of digits) await page.click(`.keypad [data-k="${d}"]`); };
+  const typePin = async (page, digits) => { for (const d of digits) await page.click(`.keypad [data-k="${d}"]`); };
+  const type = typePin;
   const shot = async (page, name) => { if (SHOTS) await page.waitForTimeout(700); if (SHOTS) await page.screenshot({ path: path.join(shots, name + '.png'), fullPage: true }); };
   const log = (page) => page.evaluate(() => window.__log.slice());
 
@@ -172,16 +174,20 @@ function fakeApp(mode) {
   check('screen time and extras are saved', extras.dailyLimitMin === 60 && extras.bedtimeOn === true &&
     extras.bedtimeStart === '20:00' && extras.restrictedMode === true);
   await page.click('[data-next]');
-  check('step 4 offers the smart checker with Clef picked', (await page.getAttribute('[data-type="CLEF"]', 'aria-checked')) === 'true');
+  check('step 4 recommends Clef Flash via OpenRouter', (await page.getAttribute('#checker-form [data-type="OPENROUTER_DECISIONS"]', 'aria-checked')) === 'true');
+  check('recommended setup needs one visible key field and no account ID', await page.locator('#checker-form [data-field]:visible').count() === 1 && await page.locator('#checker-form [data-field="accountId"]').count() === 0);
+  check('default checker has no custom model clutter', await page.locator('#checker-form [data-custom-model]').count() === 0);
+  check('recommended Decisions checker has no thumbnail option', await page.locator('#checker-form [data-thumbs]').count() === 0);
+  check('recommended setup explains credit and hides optional backup by default', (await page.textContent('#checker-form')).includes('Requires OpenRouter credit') && !(await page.isVisible('#backup-form')) && await page.isVisible('[data-switch="blockOnAiFailure"]'));
+  await shot(page, '03a-simple-checker-default');
   await page.click('[data-done]');
   check('only-show requires configured AI before setup finishes', (await page.textContent('#checker-error')).includes('configured smart checker'));
   await page.click('[data-skip]');
   check('skipping AI cannot bypass only-show protection', (await page.textContent('h1')) === 'Add a smart checker');
-  await page.fill('[data-field="accountId"]', 'acct123');
   await page.fill('[data-field="apiKey"]', 'secret');
   await page.dispatchEvent('[data-field="apiKey"]', 'change');
-  await page.dispatchEvent('[data-field="accountId"]', 'change');
   check('safety pause defaults on in onboarding', (await page.getAttribute('[data-switch="blockOnAiFailure"]', 'aria-checked')) === 'true');
+  await page.click('[data-backup] > summary');
   await page.click('#backup-form [data-type="OPENAI_COMPATIBLE"]');
   await page.fill('#backup-form [data-field="apiKey"]', 'backup-key');
   await page.dispatchEvent('#backup-form [data-field="apiKey"]', 'change');
@@ -193,7 +199,7 @@ function fakeApp(mode) {
   const after = await page.evaluate(() => window.__settings.provider);
   const setupSettings = await page.evaluate(() => window.__settings);
   check('onboarding persists backup and safety choices', setupSettings.fallbackProvider.type === 'OPENAI_COMPATIBLE' && setupSettings.fallbackProvider.apiKey === 'backup-key' && setupSettings.fallbackProvider.model === 'backup-model' && setupSettings.blockOnAiFailure === false && setupSettings.allowedContent.includes('Planet Coaster'));
-  check('the checker keys are saved', after.type === 'CLEF' && after.accountId === 'acct123' && after.apiKey === 'secret');
+  check('the checker keys are saved', after.type === 'OPENROUTER_DECISIONS' && !after.accountId && after.apiKey === 'secret' && !after.model);
   check('the last screen shows how to get back', (await page.textContent('.welcome-lead')).includes('hold the YouTube logo'));
   await page.waitForTimeout(1500);
   await shot(page, '03b-all-set');
@@ -292,6 +298,16 @@ function fakeApp(mode) {
   await page.waitForTimeout(100);
   check('testing shows what would be hidden', (await page.textContent('[data-out]')).includes('Hidden'));
   await shot(page, '07-smart-checker');
+  await page.evaluate(() => {
+    window.__originalCall = window.SafeTubeParent.call;
+    window.SafeTubeParent.call = (name, args, id) => {
+      if (name === 'testAi') setTimeout(() => window.__parent.done(id, JSON.stringify({ error: 'The API key was rejected. Paste a valid key and try again.' })), 1);
+      else window.__originalCall(name, args, id);
+    };
+  });
+  await page.click('#form [data-test]'); await page.waitForTimeout(100);
+  check('checker test failure shows actionable error without successful decision tags', (await page.textContent('#form [data-out]')).includes('Paste a valid key') && await page.locator('#form [data-out] .tag').count() === 0);
+  await page.evaluate(() => { window.SafeTubeParent.call = window.__originalCall; });
 
   await page.click('[data-page="rules"]');
   await page.click('[data-suggest]');
@@ -355,6 +371,7 @@ function fakeApp(mode) {
   await type(page, '4321'); await page.waitForTimeout(200); await type(page, '4321'); await page.waitForTimeout(200);
   await page.fill('#allowedContent', 'Science lessons'); await page.dispatchEvent('#allowedContent', 'change');
   await page.click('[data-next]'); await page.click('[data-next]');
+  await page.click('#checker-form [data-other-providers] > summary');
   await page.click('#checker-form [data-type="OPENAI_COMPATIBLE"]');
   await page.fill('#checker-form [data-field="baseUrl"]', 'http://localhost:11434/v1');
   await page.dispatchEvent('#checker-form [data-field="baseUrl"]', 'change');
@@ -362,6 +379,116 @@ function fakeApp(mode) {
   await page.dispatchEvent('#checker-form [data-field="model"]', 'change');
   await page.click('[data-done]');
   check('onboarding accepts keyless compatible local checkers for Only show', (await page.textContent('.welcome-lead')).includes('hold the YouTube logo') && (await page.evaluate(() => window.__settings.provider.apiKey)) === '');
+  await page.close();
+  page = await open('setup');
+  await page.click('[data-go]');
+  await type(page, '4321'); await page.waitForTimeout(200); await type(page, '4321'); await page.waitForTimeout(200);
+  await page.fill('#allowedContent', 'Science lessons'); await page.dispatchEvent('#allowedContent', 'change');
+  await page.click('[data-next]'); await page.click('[data-next]');
+  await page.fill('#checker-form [data-field="apiKey"]', 'openrouter-key');
+  await page.dispatchEvent('#checker-form [data-field="apiKey"]', 'change');
+  await page.click('[data-done]');
+  check('one OpenRouter key completes Only show setup without an account, model or backup', (await page.textContent('.welcome-lead')).includes('hold the YouTube logo') && await page.evaluate(() => window.__settings.provider.type === 'OPENROUTER_DECISIONS' && !window.__settings.provider.accountId && !window.__settings.provider.model && window.__settings.fallbackProvider.type === 'NONE' && window.__settings.blockOnAiFailure === true));
+  await page.close();
+  // Existing configurations render exactly as saved; opening the UI never migrates them.
+  for (const type of ['NONE', 'CLEF', 'JEV', 'ANTHROPIC', 'OPENAI_COMPATIBLE', 'OPENROUTER_DECISIONS']) {
+    const provider = { type, accountId: 'existing-account', apiKey: 'existing-key', baseUrl: 'https://existing.example/v1', model: 'existing-custom-model', sendThumbnails: false };
+    const fallbackProvider = { ...provider, type: 'JEV', model: 'typesafe/jev-1.14' };
+    page = await open('unlock', null, { provider, fallbackProvider });
+    await typePin(page, '1234');
+    await page.click('[data-page="checker"]');
+    const existing = await page.evaluate(() => window.__settings);
+    check(`${type} settings and existing backup stay unchanged on opening`, JSON.stringify(existing.provider) === JSON.stringify(provider) && JSON.stringify(existing.fallbackProvider) === JSON.stringify(fallbackProvider) && await page.isVisible('#backup-form') && !(await log(page)).includes('save'));
+    if (type === 'CLEF') {
+      await page.click('[data-page="overview"]');
+      check('overview does not imply unlimited free Cloudflare checks', (await page.textContent('[data-checker-name]')) === 'Direct Cloudflare');
+      await page.click('[data-page="checker"]');
+      await page.click('#form [data-type="OPENROUTER_DECISIONS"]');
+      check('changing direct Cloudflare to OpenRouter clears the Cloudflare credential', await page.evaluate(() => window.__settings.provider.type === 'OPENROUTER_DECISIONS' && window.__settings.provider.apiKey === '') && await page.inputValue('#form [data-field="apiKey"]') === '');
+      await page.fill('#form [data-field="apiKey"]', 'replacement-openrouter-key');
+      await page.dispatchEvent('#form [data-field="apiKey"]', 'change');
+      check('a new service only uses its explicitly pasted replacement key', await page.evaluate(() => window.__settings.provider.apiKey === 'replacement-openrouter-key'));
+      await page.click('#backup-form [data-type="CLEF"]');
+      check('changing a backup checker also clears credentials from another service', await page.evaluate(() => window.__settings.fallbackProvider.type === 'CLEF' && window.__settings.fallbackProvider.apiKey === ''));
+    }
+    if (type === 'JEV') {
+      await page.click('#form [data-type="OPENROUTER_DECISIONS"]');
+      check('Jev to recommended Decisions preserves the key for the same OpenRouter service', await page.evaluate(() => window.__settings.provider.type === 'OPENROUTER_DECISIONS' && window.__settings.provider.apiKey === 'existing-key'));
+    }
+    if (type === 'OPENAI_COMPATIBLE') {
+      await page.fill('#form [data-field="baseUrl"]', 'https://existing.example/another/path/');
+      await page.dispatchEvent('#form [data-field="baseUrl"]', 'change');
+      await page.fill('#form [data-field="model"]', 'another-model');
+      await page.dispatchEvent('#form [data-field="model"]', 'change');
+      check('compatible path and model edits preserve the same-origin key', await page.evaluate(() => window.__settings.provider.apiKey === 'existing-key'));
+      for (const url of ['http://existing.example/v1', 'http://existing.example:8080/v1', 'https://different.example/v1', '', 'invalid URL']) {
+        await page.fill('#form [data-field="apiKey"]', 'key-for-current-service');
+        await page.dispatchEvent('#form [data-field="apiKey"]', 'change');
+        await page.fill('#form [data-field="baseUrl"]', url);
+        await page.dispatchEvent('#form [data-field="baseUrl"]', 'change');
+        check(`compatible destination change clears credentials: ${url || '(blank)'}`, await page.evaluate(() => window.__settings.provider.apiKey === '') && await page.inputValue('#form [data-field="apiKey"]') === '');
+      }
+      await page.click('#backup-form [data-type="OPENAI_COMPATIBLE"]');
+      await page.fill('#backup-form [data-field="apiKey"]', 'backup-service-key');
+      await page.dispatchEvent('#backup-form [data-field="apiKey"]', 'change');
+      await page.fill('#backup-form [data-field="baseUrl"]', 'https://existing.example/another/');
+      await page.dispatchEvent('#backup-form [data-field="baseUrl"]', 'change');
+      check('backup compatible path edits preserve its same-origin key', await page.evaluate(() => window.__settings.fallbackProvider.apiKey === 'backup-service-key'));
+      await page.fill('#backup-form [data-field="baseUrl"]', 'https://other-backup.example/v1');
+      await page.dispatchEvent('#backup-form [data-field="baseUrl"]', 'change');
+      check('backup compatible origin changes clear the old service key', await page.evaluate(() => window.__settings.fallbackProvider.apiKey === ''));
+    }
+    if (type === 'OPENROUTER_DECISIONS') {
+      await page.fill('#form [data-field="model"]', 'typesafe/jev-1.14');
+      await page.dispatchEvent('#form [data-field="model"]', 'change');
+      await page.locator('#form [data-model-options]').evaluate((e) => { e.open = false; });
+      check('editing the model keeps the same-service API key', await page.evaluate(() => window.__settings.provider.apiKey === 'existing-key'));
+      check('actual custom model stays visible outside advanced controls', await page.isVisible('#form [data-custom-model]') && (await page.textContent('#form [data-custom-model]')).includes('typesafe/jev-1.14'));
+      await page.click('#form [data-type="OPENROUTER_DECISIONS"]');
+      check('clicking the selected recommended card preserves the custom model', await page.evaluate(() => window.__settings.provider.model === 'typesafe/jev-1.14' && window.__settings.provider.apiKey === 'existing-key'));
+      await page.click('[data-page="overview"]');
+      check('overview names the actual OpenRouter model', (await page.textContent('[data-checker-name]')) === 'OpenRouter · typesafe/jev-1.14');
+      await page.click('[data-page="checker"]');
+      check('custom OpenRouter Decisions models persist across pages', (await page.inputValue('#form [data-field="model"]')) === 'typesafe/jev-1.14');
+      await page.click('#form [data-reset-model]');
+      check('reset restores the native recommended model without changing the key', await page.evaluate(() => window.__settings.provider.model === '' && window.__settings.provider.apiKey === 'existing-key') && (await page.getAttribute('#form [data-field="model"]', 'placeholder')) === 'cloudflare/clef-flash');
+      check('Decisions providers are absent from keyword helper service choices', await page.locator('#helper [data-type="OPENROUTER_DECISIONS"]').count() === 0);
+    }
+    await page.close();
+  }
+  const existingHelper = { type: 'OPENAI_COMPATIBLE', apiKey: 'existing-helper-key', baseUrl: 'https://helper.example/v1', model: 'helper-model' };
+  page = await open('unlock', null, { helper: existingHelper });
+  await typePin(page, '1234'); await page.click('[data-page="checker"]');
+  check('opening the helper preserves its saved destination and credential', JSON.stringify(await page.evaluate(() => window.__settings.helper)) === JSON.stringify(existingHelper));
+  await page.click('#helper [data-edit]');
+  await page.fill('#helper [data-h="baseUrl"]', 'https://helper.example/another/path/');
+  await page.dispatchEvent('#helper [data-h="baseUrl"]', 'change');
+  await page.fill('#helper [data-h="model"]', 'new-helper-model');
+  await page.click('#helper [data-done]');
+  check('helper same-origin paths and model edits keep its key', await page.evaluate(() => window.__settings.helper.apiKey === 'existing-helper-key' && window.__settings.helper.model === 'new-helper-model'));
+  await page.click('#helper [data-edit]');
+  await page.selectOption('#helper [data-htype]', 'ANTHROPIC');
+  check('changing helper service clears the previous service key', await page.inputValue('#helper [data-h="apiKey"]') === '');
+  await page.selectOption('#helper [data-htype]', 'OPENAI_COMPATIBLE');
+  for (const url of ['https://helper.example:8080/v1', 'not a valid URL', '']) {
+    await page.fill('#helper [data-h="apiKey"]', 'replacement-helper-key');
+    await page.fill('#helper [data-h="baseUrl"]', url);
+    await page.dispatchEvent('#helper [data-h="baseUrl"]', 'change');
+    check(`helper destination change clears credentials: ${url || '(blank)'}`, await page.inputValue('#helper [data-h="apiKey"]') === '');
+  }
+  await page.click('#helper [data-done]');
+  check('helper persists no retained foreign-service key after destination changes', await page.evaluate(() => window.__settings.helper.apiKey === '' && window.__settings.helper.type === 'NONE'));
+  await page.close();
+  page = await open('unlock', null, { helper: { ...existingHelper, type: 'NONE', apiKey: 'inactive-old-key' } });
+  await typePin(page, '1234'); await page.click('[data-page="checker"]');
+  check('loading an inactive helper does not change saved settings', await page.evaluate(() => window.__settings.helper.apiKey === 'inactive-old-key'));
+  await page.click('#helper [data-edit]');
+  check('activating another helper does not expose an inactive retained credential', await page.inputValue('#helper [data-h="apiKey"]') === '');
+  await page.close();
+  page = await open('unlock', { width: 390, height: 844 }, { provider: { type: 'OPENROUTER_DECISIONS', apiKey: 'test-key', model: '', sendThumbnails: false } });
+  await typePin(page, '1234'); await page.click('[data-page="checker"]');
+  check('simple checker fits a phone without sideways scrolling', await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await shot(page, '13-phone-simple-checker');
   await page.close();
   await browser.close();
   server.close();

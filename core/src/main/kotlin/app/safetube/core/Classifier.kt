@@ -18,7 +18,7 @@ interface VideoClassifier {
 object Classifiers {
     fun create(config: ProviderConfig): VideoClassifier? = when (config.type) {
         ProviderType.NONE -> null
-        ProviderType.CLEF, ProviderType.JEV -> DecisionModelClassifier(config)
+        ProviderType.CLEF, ProviderType.JEV, ProviderType.OPENROUTER_DECISIONS -> DecisionModelClassifier(config)
         ProviderType.ANTHROPIC -> AnthropicClassifier(config)
         ProviderType.OPENAI_COMPATIBLE -> OpenAiCompatibleClassifier(config)
     }

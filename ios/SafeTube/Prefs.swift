@@ -29,13 +29,13 @@ final class Prefs {
         get {
             let settings = filterSettings()
             if settings.mustBlockForAiConfiguration {
-                sp.set(settings.aiConfigHash(), forKey: "aiUnavailableHash")
+                sp.set(settings.outageConfigHash(), forKey: "aiUnavailableHash")
                 return true
             }
-            return settings.blockOnAiFailure && string("aiUnavailableHash", "") == settings.aiConfigHash()
+            return settings.blockOnAiFailure && string("aiUnavailableHash", "") == settings.outageConfigHash()
         }
         set {
-            if newValue { sp.set(filterSettings().aiConfigHash(), forKey: "aiUnavailableHash") }
+            if newValue { sp.set(filterSettings().outageConfigHash(), forKey: "aiUnavailableHash") }
             else { sp.removeObject(forKey: "aiUnavailableHash") }
         }
     }

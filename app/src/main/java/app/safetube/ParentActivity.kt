@@ -113,6 +113,7 @@ class ParentActivity : Activity() {
                         "models", JSONObject()
                             .put("CLEF", ProviderConfig.DEFAULT_CLEF_MODEL)
                             .put("JEV", ProviderConfig.DEFAULT_JEV_MODEL)
+                            .put("OPENROUTER_DECISIONS", ProviderConfig.DEFAULT_OPENROUTER_DECISION_MODEL)
                             .put("ANTHROPIC", ProviderConfig.DEFAULT_ANTHROPIC_MODEL)
                     )
             )
@@ -396,13 +397,23 @@ class ParentActivity : Activity() {
     /** Runs the saved rules against two example videos so the parent can see it working. */
     private fun testAi(): JSONObject {
         val settings = prefs.filterSettings()
+        if (!settings.provider.isAiEnabled && !settings.fallbackProvider.isAiEnabled) {
+            return JSONObject().put("error", "Choose a checker and enter its API key before testing.")
+        }
         val samples = listOf(
             VideoInfo("aaaaaaaaaaa", "Five Little Pumpkins | Halloween Song for Kids", "Sing Along Street"),
             VideoInfo("bbbbbbbbbbb", "Counting to 20 with Building Blocks", "Number Garden"),
         )
-        val decisions = DecisionEngine(InMemoryVerdictStore(), metadata = null).decide(samples,
-            settings.copy(provider = settings.provider.copy(sendThumbnails = false),
-                fallbackProvider = settings.fallbackProvider.copy(sendThumbnails = false))).associateBy { it.id }
+        val testSettings = settings.copy(
+                rules = if (settings.effectiveRules().isBlank()) "No content restrictions have been set." else settings.rules,
+                blockedKeywords = emptyList(), blockedChannels = emptyList(),
+                provider = settings.provider.copy(sendThumbnails = false),
+                fallbackProvider = settings.fallbackProvider.copy(sendThumbnails = false))
+        val decisions = DecisionEngine(InMemoryVerdictStore(), metadata = null).decide(samples, testSettings).associateBy { it.id }
+        val error = decisions.values.firstOrNull { it.verdict == Verdict.UNKNOWN }
+        if (error != null || decisions.size != samples.size || decisions.values.any { !it.freshAi }) {
+            return JSONObject().put("error", error?.reason ?: "The checker did not return an answer for every test video.")
+        }
         return JSONObject().put("results", JSONArray(samples.map { v ->
             val decision = decisions[v.id]
             JSONObject()

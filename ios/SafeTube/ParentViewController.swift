@@ -241,6 +241,7 @@ final class ParentViewController: UIViewController, WKNavigationDelegate, WKUIDe
                 "models": [
                     "CLEF": ProviderConfig.defaultClefModel,
                     "JEV": ProviderConfig.defaultJevModel,
+                    "OPENROUTER_DECISIONS": ProviderConfig.defaultOpenRouterDecisionModel,
                     "ANTHROPIC": ProviderConfig.defaultAnthropicModel,
                 ],
             ] as [String: Any],
@@ -451,6 +452,14 @@ final class ParentViewController: UIViewController, WKNavigationDelegate, WKUIDe
     /// Runs the saved rules against two example videos so the parent can see it working.
     private func testAi() throws -> [String: Any] {
         var settings = prefs.filterSettings()
+        guard settings.provider.isAiEnabled || settings.fallbackProvider.isAiEnabled else {
+            return ["error": "Set up and save a checker or backup first. Check its API key, model and any required Cloudflare account ID."]
+        }
+        // A connection test must reach the checker, even when local rules would hide both samples.
+        // Only this copy changes; the parent's saved rules and local blocks remain intact.
+        settings.blockedKeywords = []
+        settings.blockedChannels = []
+        if settings.effectiveRules().isBlank { settings.rules = "No content restrictions have been set." }
         settings.provider.sendThumbnails = false
         settings.fallbackProvider.sendThumbnails = false
         let samples = [
@@ -460,11 +469,20 @@ final class ParentViewController: UIViewController, WKNavigationDelegate, WKUIDe
         let decisions = DecisionEngine(InMemoryVerdictStore(), metadata: nil).decide(samples, settings, forceFresh: true)
         var scores: [String: Decision] = [:]
         for d in decisions { scores[d.id] = d }
+        for video in samples {
+            guard let decision = scores[video.id] else {
+                return ["error": "The checker did not answer every sample. Check the connection, model and available credit, then try again."]
+            }
+            if decision.source == .error || decision.verdict == .unknown || !decision.freshAi {
+                let reason = decision.reason.isBlank ? "No fresh AI answer was received." : decision.reason
+                return ["error": "AI test failed: \(reason) Check the checker or backup settings and available credit, then try again."]
+            }
+        }
         return ["results": samples.map { v -> [String: Any] in
             let s = scores[v.id]
             return [
                 "title": v.title,
-                "hidden": s.map { $0.verdict != .allow } ?? true,
+                "hidden": s.map { $0.verdict == .block } ?? true,
                 "reason": s?.reason ?? "No answer",
             ]
         }]
