@@ -121,10 +121,11 @@ OpenAI-compatible checker instead. **Other checkers** keeps the alternative serv
 available. Existing saved providers are preserved when updating the app.
 
 An **Optional backup checker** is available under Safety. The default-on pause protection is
-visible even when no backup is configured. You can also set up the separate keyword helper:
+visible even when no backup is configured. The checker and the separate keyword helper
+serve different purposes:
 
-**Video checker** decides each video against your rules. Decision models are built for
-exactly this kind of yes/no question and answer in a fraction of a second.
+**Video checker** decides each video against your rules. Decision models return structured
+probabilities rather than chat replies.
 
 | Provider | What to enter | Cost |
 | --- | --- | --- |
