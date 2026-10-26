@@ -108,7 +108,9 @@ public final class DecisionEngine {
                 decisions[v.id] = fromScore(cached, settings.strictness)
                 continue
             }
-            if v.title.isBlank && !settings.provider.usesThumbnails && !settings.fallbackProvider.usesThumbnails {
+            let canCheckThumbnail = (settings.provider.isAiEnabled && settings.provider.usesThumbnails) ||
+                (settings.fallbackProvider.isAiEnabled && settings.fallbackProvider.usesThumbnails)
+            if v.title.isBlank && !canCheckThumbnail {
                 decisions[v.id] = Decision(v.id, .unknown, .error, reason: "No title to check")
                 continue
             }
@@ -172,8 +174,13 @@ public final class DecisionEngine {
                 guard config.isAiEnabled, let c = candidate else {
                     throw ClassifierException("AI provider is missing or misconfigured")
                 }
-                let wanted = Set(pending.map { $0.id })
-                for score in try c.classify(pending, rules: settings.effectiveRules()) {
+                let eligible = pending.filter { !$0.title.isBlank || config.usesThumbnails }
+                guard !eligible.isEmpty else {
+                    failure = "No title to check with this provider"
+                    return
+                }
+                let wanted = Set(eligible.map { $0.id })
+                for score in try c.classify(eligible, rules: settings.effectiveRules()) {
                     if wanted.contains(score.id), score.p.isFinite, (0...1).contains(score.p) { got[score.id] = score }
                 }
             } catch { failure = (error as? ClassifierException)?.message ?? error.localizedDescription }

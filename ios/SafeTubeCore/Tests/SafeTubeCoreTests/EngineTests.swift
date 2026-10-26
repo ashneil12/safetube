@@ -455,3 +455,58 @@ final class AvailabilityProbeTests: XCTestCase {
         XCTAssertEqual(backup.seen, [[video.id]])
     }
 }
+
+final class MissingTitleProtectionTests: XCTestCase {
+    let video = VideoInfo("aaaaaaaaaaa")
+    func testPrimaryClefAndDisabledFallbackCannotCheckMissingTitle() {
+        let fake = RecoveryAndRuleTests.Stub([Score(video.id, 0, "no evidence")])
+        let config = FilterSettings(rules: "No violence",
+            provider: ProviderConfig(.clef, apiKey: "test", accountId: "account"))
+        let result = DecisionEngine(InMemoryVerdictStore(), classifierFactory: { _ in fake }, metadata: nil).decide([video], config)
+        XCTAssertEqual(result.first?.verdict, .unknown)
+        XCTAssertEqual(result.first?.source, .error)
+        XCTAssertTrue(fake.seen.isEmpty)
+    }
+    func testFallbackOnlyClefAndDisabledPrimaryCannotCheckMissingTitle() {
+        let fake = RecoveryAndRuleTests.Stub([Score(video.id, 0, "no evidence")])
+        let config = FilterSettings(allowedContent: "Planet Coaster",
+            fallbackProvider: ProviderConfig(.clef, apiKey: "test", accountId: "account"))
+        let result = DecisionEngine(InMemoryVerdictStore(), classifierFactory: { _ in fake }, metadata: nil).decide([video], config)
+        XCTAssertEqual(result.first?.verdict, .unknown)
+        XCTAssertEqual(result.first?.source, .error)
+        XCTAssertTrue(fake.seen.isEmpty)
+    }
+    func testEnabledVisionProviderCanCheckThumbnailWithoutTitle() {
+        let fake = RecoveryAndRuleTests.Stub([Score(video.id, 0.1, "park thumbnail")])
+        let config = FilterSettings(rules: "No violence", provider: ProviderConfig(.anthropic, apiKey: "test"))
+        let result = DecisionEngine(InMemoryVerdictStore(), classifierFactory: { _ in fake }, metadata: nil).decide([video], config)
+        XCTAssertEqual(result.first?.verdict, .allow)
+        XCTAssertEqual(result.first?.freshAi, true)
+        XCTAssertEqual(fake.seen, [[video.id]])
+    }
+}
+
+extension MissingTitleProtectionTests {
+    func testTitlelessVisionFailureCannotFallBackToDecisionOnlyClassifier() {
+        let primary = RecoveryAndRuleTests.Stub(fails: true)
+        let backup = RecoveryAndRuleTests.Stub([Score(video.id, 0, "no evidence")])
+        let config = FilterSettings(rules: "No violence", provider: ProviderConfig(.anthropic, apiKey: "primary"),
+            fallbackProvider: ProviderConfig(.clef, apiKey: "backup", accountId: "account"))
+        let result = DecisionEngine(InMemoryVerdictStore(), classifierFactory: { $0.type == .anthropic ? primary : backup }, metadata: nil).decide([video], config)
+        XCTAssertEqual(result.first?.verdict, .unknown)
+        XCTAssertEqual(result.first?.source, .error)
+        XCTAssertEqual(primary.seen, [[video.id]])
+        XCTAssertTrue(backup.seen.isEmpty)
+    }
+    func testTitlelessDecisionPrimaryIsSkippedForVisionFallback() {
+        let primary = RecoveryAndRuleTests.Stub([Score(video.id, 0, "no evidence")])
+        let backup = RecoveryAndRuleTests.Stub([Score(video.id, 0.1, "park thumbnail")])
+        let config = FilterSettings(rules: "No violence", provider: ProviderConfig(.clef, apiKey: "primary", accountId: "account"),
+            fallbackProvider: ProviderConfig(.anthropic, apiKey: "backup"))
+        let result = DecisionEngine(InMemoryVerdictStore(), classifierFactory: { $0.type == .clef ? primary : backup }, metadata: nil).decide([video], config)
+        XCTAssertEqual(result.first?.verdict, .allow)
+        XCTAssertEqual(result.first?.freshAi, true)
+        XCTAssertTrue(primary.seen.isEmpty)
+        XCTAssertEqual(backup.seen, [[video.id]])
+    }
+}
