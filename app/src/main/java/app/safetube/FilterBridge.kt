@@ -116,7 +116,8 @@ class FilterBridge(
                 synchronized(stateLock) {
                     if (version == prefs.version && generation == pageGeneration) {
                         hadFreshAi = hadFreshAi || decisions.any { it.freshAi }
-                        if (decisions.any { it.source == DecisionSource.ERROR }) {
+                        // Only a checker that is down pauses YouTube; one unreadable video just stays hidden.
+                        if (decisions.any { it.checkerFailed }) {
                             hadFailure = true
                             if (settings.blockOnAiFailure) {
                                 aiUnavailable = true
@@ -127,7 +128,7 @@ class FilterBridge(
                     }
                 }
                 if (version == prefs.version && generation == pageGeneration) {
-                    decisions.firstOrNull { it.source == DecisionSource.ERROR }?.let { onAiError(it.reason) }
+                    decisions.firstOrNull { it.checkerFailed }?.let { onAiError(it.reason) }
                     prefs.recordChecked(decisions.count { it.verdict != Verdict.UNKNOWN })
                     val result = JSONObject()
                     decisions.forEach { result.put(it.id, it.verdict.wire) }
@@ -143,7 +144,7 @@ class FilterBridge(
                 // During an outage, retry fresh checks; cached/local allowances cannot restore access.
                 engine.decide(videos, settings, bypassCache = retry, emit = send)
             } catch (e: Exception) {
-                send(videos.map { Decision(it.id, Verdict.UNKNOWN, DecisionSource.ERROR, reason = e.toString()) })
+                send(videos.map { Decision(it.id, Verdict.UNKNOWN, DecisionSource.ERROR, reason = e.toString(), checkerFailed = true) })
             }
             if (retry && !hadFailure && !hadFreshAi && version == prefs.version && generation == pageGeneration) {
                 hadFreshAi = engine.probeAiAvailability(videos, settings)

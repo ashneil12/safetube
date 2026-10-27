@@ -95,9 +95,19 @@
       else { root.querySelector('#content-error').textContent = 'Enter a description to activate Only show.'; root.querySelector('#allowedContent').focus(); }
     });
     root.querySelector('#allowedContent').addEventListener('input', (e) => { if (e.target.value.trim()) { mode.value = 'only'; root.querySelector('#content-error').textContent = ''; } });
-    ['allowedContent', 'exceptions'].forEach((key) => root.querySelector('#' + key).addEventListener('change', (e) => {
-      S.settings[key] = e.target.value.trim(); save('Rules saved');
-    }));
+    ['allowedContent', 'exceptions'].forEach((key) => saveAsTyped(root.querySelector('#' + key), (v) => { S.settings[key] = v; }));
+  }
+
+  // Text boxes save while the parent types, so leaving with the back button never loses an edit.
+  function saveAsTyped(box, apply) {
+    let timer = 0;
+    const commit = (quiet) => {
+      clearTimeout(timer);
+      const v = box.value.trim();
+      apply(v); save(quiet ? '' : 'Rules saved');
+    };
+    box.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => commit(true), 800); });
+    box.addEventListener('change', () => commit(false));
   }
 
   function save(message) {
@@ -516,11 +526,24 @@
       <p class="note">${v.source ? 'Source: ' + esc(v.source) + '. ' : ''}${v.verdict ? 'Decision: ' + esc(v.verdict) + '. ' : ''}${typeof v.score === 'number' ? 'Rule-match score: ' + esc(v.score) + '. ' : ''}${typeof v.threshold === 'number' ? 'Hide threshold: ' + esc(v.threshold) + '.' : ''}</p>
       <p class="note">The score estimates whether this video matches your hide rules. A lower hide threshold is stricter. This is a metadata assessment, not a review of everything spoken or shown.</p><h3>Available description</h3><p class="detail-copy">${esc(v.description || 'The full video description is not available here. Open the video to review it before changing your rules.')}</p>
       ${v.error ? `<p class="note">${esc(v.error)}</p>` : ''}
-      <div class="dialog-actions"><button class="btn btn-primary" data-watch>View on YouTube</button><button class="btn btn-ghost" data-allow-detail>Allow video</button><button class="btn btn-ghost" data-edit>Edit rules</button></div>`;
+      <div class="dialog-actions"><button class="btn btn-primary" data-watch>View on YouTube</button><button class="btn btn-ghost" data-allow-detail>Allow just this video</button><button class="btn btn-ghost" data-allow-like>Allow videos like this</button><button class="btn btn-ghost" data-edit>Edit rules</button></div>
+      <p class="note">“Allow videos like this” adds a line to Fine-tune the smart checker, so similar videos are judged the same way from now on.</p>`;
     dialog.querySelector('[data-close]').onclick = () => close();
     dialog.querySelector('[data-close]').focus();
     dialog.querySelector('[data-watch]').onclick = () => B.openLink('https://www.youtube.com/watch?v=' + encodeURIComponent(id));
     dialog.querySelector('[data-allow-detail]').onclick = () => { B.allow(id, v.title || id); close(); toast('Allowed.'); shell(); };
+    dialog.querySelector('[data-allow-like]').onclick = () => {
+      ensureSettings();
+      const line = `Videos like “${(v.title || id).slice(0, 90)}”${v.channel ? ' from ' + v.channel.slice(0, 40) : ''} are fine.`;
+      if (!(S.settings.exceptions || '').includes(line)) S.settings.exceptions = [S.settings.exceptions, line].filter(Boolean).join('\n');
+      B.allow(id, v.title || id);
+      save('');
+      close();
+      toast((S.settings.exceptions || '').length > 600
+        ? 'Allowed. Your fine-tune notes are getting long; tidy them under What to hide.'
+        : 'Allowed. Similar videos will be judged the same way.');
+      shell();
+    };
     dialog.querySelector('[data-edit]').onclick = () => { close(); page = 'rules'; shell(); };
   }
 
@@ -714,7 +737,7 @@
       save('Preset added'); rules(main);
     }));
     const ta = main.querySelector('#rules');
-    ta.addEventListener('change', () => { S.settings.rules = ta.value.trim(); save('Rules saved'); });
+    saveAsTyped(ta, (v) => { S.settings.rules = v; });
     drawChips(main.querySelector('#chips'));
     main.querySelector('[data-go="time"]').addEventListener('click', () => { page = 'time'; shell(); });
     main.querySelector('[data-suggest]').addEventListener('click', () => suggest(main.querySelector('#suggest'), ta));
@@ -1051,6 +1074,14 @@
       save(changedService ? 'Paste the API key for this service.' : 'Saved');
       if (input.dataset.field === 'model') box.querySelector('[data-custom-model-note]').innerHTML = customDecisionNotice(p);
     }));
+    // A pasted key is kept even if the parent leaves straight away (the server address waits for "change").
+    box.querySelectorAll('[data-field]:not([data-field="baseUrl"])').forEach((input) => {
+      let timer = 0;
+      input.addEventListener('input', () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => { p[input.dataset.field] = input.value.trim(); save(''); }, 600);
+      });
+    });
     const resetModel = box.querySelector('[data-reset-model]');
     if (resetModel) resetModel.addEventListener('click', () => { p.model = ''; save('Recommended model restored'); checkerForm(box, { compact, fallback }); });
     const thumbs = box.querySelector('[data-thumbs]');

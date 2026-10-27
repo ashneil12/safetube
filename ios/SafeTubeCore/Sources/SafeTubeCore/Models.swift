@@ -57,14 +57,18 @@ public struct Decision: Equatable {
     public let score: Double?
     public let reason: String
     public let freshAi: Bool
+    /// The checker itself couldn't be reached or refused the request (not just one unreadable video).
+    public let checkerFailed: Bool
 
-    public init(_ id: String, _ verdict: Verdict, _ source: DecisionSource, score: Double? = nil, reason: String = "", freshAi: Bool = false) {
+    public init(_ id: String, _ verdict: Verdict, _ source: DecisionSource, score: Double? = nil, reason: String = "",
+                freshAi: Bool = false, checkerFailed: Bool = false) {
         self.id = id
         self.verdict = verdict
         self.source = source
         self.score = score
         self.reason = reason
         self.freshAi = freshAi
+        self.checkerFailed = checkerFailed
     }
 }
 
@@ -218,6 +222,14 @@ public struct FilterSettings {
         var parts: [String] = []
         if !rules.isBlank { parts.append("Hide content matching: " + rules.trimmed) }
         if !allowedContent.isBlank { parts.append("ONLY SHOW content matching this description; block everything outside it: " + allowedContent.trimmed) }
+        if !exceptions.isBlank { parts.append("Parent clarification and exceptions to AI rules: " + exceptions.trimmed + ". This never overrides manual blocks or keyword blocks.") }
+        return parts.joined(separator: "\n\n")
+    }
+
+    /// The hide rules and the parent's clarifications, without the ONLY SHOW part.
+    public func hideRules() -> String {
+        var parts: [String] = []
+        if !rules.isBlank { parts.append("Hide content matching: " + rules.trimmed) }
         if !exceptions.isBlank { parts.append("Parent clarification and exceptions to AI rules: " + exceptions.trimmed + ". This never overrides manual blocks or keyword blocks.") }
         return parts.joined(separator: "\n\n")
     }

@@ -168,8 +168,10 @@ public final class DecisionEngine {
                                _ hash: String) -> [String: Decision] {
         var got: [String: Score] = [:]
         var failure = "No valid AI score returned"
+        var checkerFailed = false
         func attempt(_ config: ProviderConfig, _ candidate: VideoClassifier?, _ pending: [VideoInfo]) {
             guard !pending.isEmpty else { return }
+            checkerFailed = false
             do {
                 guard config.isAiEnabled, let c = candidate else {
                     throw ClassifierException("AI provider is missing or misconfigured")
@@ -180,10 +182,13 @@ public final class DecisionEngine {
                     return
                 }
                 let wanted = Set(eligible.map { $0.id })
-                for score in try c.classify(eligible, rules: settings.effectiveRules()) {
+                for score in try c.classify(eligible, settings: settings) {
                     if wanted.contains(score.id), score.p.isFinite, (0...1).contains(score.p) { got[score.id] = score }
                 }
-            } catch { failure = (error as? ClassifierException)?.message ?? error.localizedDescription }
+            } catch {
+                checkerFailed = true
+                failure = (error as? ClassifierException)?.message ?? error.localizedDescription
+            }
         }
         attempt(settings.provider, classifier, batch)
         let missing = batch.filter { got[$0.id] == nil }
@@ -196,7 +201,7 @@ public final class DecisionEngine {
                 store.saveScore(score, configHash: hash, video: v)
                 out[v.id] = fromScore(score, settings.strictness, freshAi: true)
             } else {
-                out[v.id] = Decision(v.id, .unknown, .error, reason: failure)
+                out[v.id] = Decision(v.id, .unknown, .error, reason: failure, checkerFailed: checkerFailed)
             }
         }
         return out

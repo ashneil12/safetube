@@ -39,6 +39,8 @@ data class Decision(
     val score: Double? = null,
     val reason: String = "",
     val freshAi: Boolean = false,
+    /** The checker itself couldn't be reached or refused the request (not just one unreadable video). */
+    val checkerFailed: Boolean = false,
 )
 
 /**
@@ -129,10 +131,16 @@ data class FilterSettings(
     val blockOnAiFailure: Boolean = true,
 ) {
     fun effectiveRules(): String = listOfNotNull(
-        rules.trim().takeIf { it.isNotEmpty() }?.let { "Hide content matching: $it" },
+        hideRulesPart(),
         allowedContent.trim().takeIf { it.isNotEmpty() }?.let { "ONLY SHOW content matching this description; block everything outside it: $it" },
-        exceptions.trim().takeIf { it.isNotEmpty() }?.let { "Parent clarification and exceptions to AI rules: $it. This never overrides manual blocks or keyword blocks." },
+        exceptionsPart(),
     ).joinToString("\n\n")
+
+    /** The hide rules and the parent's clarifications, without the ONLY SHOW part. */
+    fun hideRules(): String = listOfNotNull(hideRulesPart(), exceptionsPart()).joinToString("\n\n")
+
+    private fun hideRulesPart() = rules.trim().takeIf { it.isNotEmpty() }?.let { "Hide content matching: $it" }
+    private fun exceptionsPart() = exceptions.trim().takeIf { it.isNotEmpty() }?.let { "Parent clarification and exceptions to AI rules: $it. This never overrides manual blocks or keyword blocks." }
 
     /**
      * Identifies everything that changes what the AI would say about a video.

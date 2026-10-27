@@ -5,7 +5,7 @@ import org.json.JSONObject
 /** Builds the classification prompt and reads the model's answer. Shared by every provider. */
 object PromptBuilder {
     /** Bump when the prompt changes in a way that should invalidate cached scores. */
-    const val VERSION = 2
+    const val VERSION = 3
 
     val SYSTEM = """
         You are the content filter inside a parental-control app for YouTube.

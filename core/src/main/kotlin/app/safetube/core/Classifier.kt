@@ -13,6 +13,10 @@ interface VideoClassifier {
     /** Scores a batch of videos. May return fewer scores than videos if the model skipped some. */
     @Throws(ClassifierException::class)
     fun classify(videos: List<VideoInfo>, rules: String): List<Score>
+
+    /** Scores a batch against the parent's full settings. Providers that can ask sharper questions override this. */
+    @Throws(ClassifierException::class)
+    fun classify(videos: List<VideoInfo>, settings: FilterSettings): List<Score> = classify(videos, settings.effectiveRules())
 }
 
 object Classifiers {
