@@ -267,7 +267,7 @@ final class MainViewController: UIViewController, WKNavigationDelegate, WKUIDele
                 DispatchQueue.main.async {
                     guard let self = self, self.prefs.version == version, self.pageGeneration == generation else { return }
                     let wasUnavailable = self.aiUnavailable
-                    let errors = decisions.filter { $0.source == .error }
+                    let errors = decisions.filter { $0.checkerFailed }
                     if settings.blockOnAiFailure && (!errors.isEmpty || failedProbe) {
                         self.aiFailureRevision += 1
                         self.aiUnavailable = true
@@ -285,7 +285,7 @@ final class MainViewController: UIViewController, WKNavigationDelegate, WKUIDele
             }
             if forceFresh {
                 let decisions = engine.decide(videos, settings, forceFresh: true)
-                let needsProbe = !decisions.contains(where: { $0.source == .error || $0.freshAi })
+                let needsProbe = !decisions.contains(where: { $0.checkerFailed || $0.freshAi })
                 let recovered = needsProbe && engine.probeAiAvailability(videos, settings)
                 deliver(decisions, recovered, needsProbe && !recovered)
             } else {

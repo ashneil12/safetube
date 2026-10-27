@@ -89,7 +89,7 @@ class DecisionEngine(
                 continue
             }
             if (!settings.provider.isAiEnabled && !settings.fallbackProvider.isAiEnabled) {
-                decisions[v.id] = Decision(v.id, Verdict.UNKNOWN, DecisionSource.ERROR, reason = "AI rules require a configured checker")
+                decisions[v.id] = Decision(v.id, Verdict.UNKNOWN, DecisionSource.ERROR, reason = "AI rules require a configured checker", checkerFailed = true)
                 continue
             }
             val cached = if (bypassCache) null else store.cachedScore(v.id, hash)
@@ -146,31 +146,40 @@ class DecisionEngine(
         hash: String,
     ): Map<String, Decision> {
         var failure = "AI skipped this video or returned an invalid score"
+        var checkerFailed = false
         fun attempt(checker: VideoClassifier?, config: ProviderConfig, videos: List<VideoInfo>): Map<String, Score> {
             val eligible = videos.filter { it.title.isNotBlank() || (config.isAiEnabled && config.usesThumbnails) }
             if (eligible.isEmpty()) {
                 failure = "No title to check with this provider"
                 return emptyMap()
             }
+            if (checker == null) {
+                checkerFailed = true
+                failure = "No working smart checker"
+                return emptyMap()
+            }
             return try {
-                checker?.classify(eligible, settings.effectiveRules()).orEmpty()
+                checker.classify(eligible, settings)
                     .filter { it.p.isFinite() && it.p in 0.0..1.0 && eligible.any { v -> v.id == it.id } }
                     .associateBy { it.id }
             } catch (e: Exception) {
+                checkerFailed = true
                 failure = e.message ?: "AI error"
                 emptyMap()
             }
         }
-        val got = attempt(classifier, settings.provider, batch).toMutableMap()
+        val got = (if (settings.provider.isAiEnabled) attempt(classifier, settings.provider, batch) else emptyMap()).toMutableMap()
         val missing = batch.filter { it.id !in got }
         if (missing.isNotEmpty() && settings.fallbackProvider.isAiEnabled) {
+            // The backup gets its own chance: only its result decides whether the checkers are down.
+            checkerFailed = false
             val fallback = try { classifierFactory(settings.fallbackProvider) } catch (e: Exception) { null }
             got.putAll(attempt(fallback, settings.fallbackProvider, missing))
         }
         return batch.associate { v ->
             val score = got[v.id]
             v.id to if (score == null) {
-                Decision(v.id, Verdict.UNKNOWN, DecisionSource.ERROR, reason = failure)
+                Decision(v.id, Verdict.UNKNOWN, DecisionSource.ERROR, reason = failure, checkerFailed = checkerFailed)
             } else {
                 store.saveScore(score, hash, v)
                 fromScore(score, settings.strictness).copy(freshAi = true)

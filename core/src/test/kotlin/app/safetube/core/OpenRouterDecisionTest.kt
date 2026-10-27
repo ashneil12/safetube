@@ -106,3 +106,61 @@ class OpenRouterDecisionTest {
         assertEquals(direct.aiConfigHash(), direct.copy(strictness = Strictness.PERMISSIVE).aiConfigHash())
     }
 }
+
+class OnlyShowDecisionTest {
+    private val config = ProviderConfig(ProviderType.OPENROUTER_DECISIONS, apiKey = "test-key")
+    private val dinos = VideoInfo("aaaaaaaaaaa", "Five Little Dinos | Kids Songs", "Toddler Tunes")
+    private val hymn = VideoInfo("bbbbbbbbbbb", "Jesus Loves Me | Bible Songs for Kids", "Sunday Sing")
+
+    @Test
+    fun `only show asks a separate fit question and hides harmless off-topic videos`() {
+        var sent: JSONObject? = null
+        val c = DecisionModelClassifier(config, transport = { _, _, body ->
+            sent = JSONObject(body)
+            // The hide question says both are harmless; only the fit question tells them apart.
+            Http.Response(200, """{"answers":{"v1":{"noul":0.02},"s1":{"noul":0.05},"v2":{"noul":0.01},"s2":{"noul":0.97}}}""")
+        })
+        val settings = FilterSettings(rules = "Nothing scary", allowedContent = "Christian content", provider = config)
+        val scores = c.classify(listOf(dinos, hymn), settings).associateBy { it.id }
+        val req = sent!!
+        assertEquals("Christian content", req.getJSONObject("state").getString("only_show"))
+        assertFalse(req.getJSONObject("state").getString("parent_rules").contains("ONLY SHOW"))
+        assertTrue(req.getJSONObject("questions").has("s1") && req.getJSONObject("questions").has("v1"))
+        assertEquals(Verdict.BLOCK, Strictness.BALANCED.verdictFor(scores.getValue(dinos.id).p))
+        assertTrue(scores.getValue(dinos.id).reason.contains("Christian content"))
+        assertEquals(Verdict.ALLOW, Strictness.BALANCED.verdictFor(scores.getValue(hymn.id).p))
+    }
+
+    @Test
+    fun `only show without hide rules asks just the fit question`() {
+        val c = DecisionModelClassifier(config, transport = { _, _, body ->
+            val q = JSONObject(body).getJSONObject("questions")
+            assertFalse(q.has("v1")); assertTrue(q.has("s1"))
+            Http.Response(200, """{"answers":{"s1":{"noul":0.1}}}""")
+        })
+        val scores = c.classify(listOf(dinos), FilterSettings(rules = "", allowedContent = "Bible stories", provider = config))
+        assertEquals(0.9, scores.single().p, 1e-9)
+    }
+
+    @Test
+    fun `a missing fit answer is never an allowance`() {
+        val c = DecisionModelClassifier(config, transport = { _, _, _ -> Http.Response(200, """{"answers":{"v1":{"noul":0.0}}}""") })
+        assertTrue(c.classify(listOf(dinos), FilterSettings(rules = "x", allowedContent = "Bible stories", provider = config)).isEmpty())
+    }
+
+    @Test
+    fun `one unreadable video is not a checker outage but a refused request is`() {
+        val ok = FilterSettings(rules = "No scary content", provider = config)
+        val noTitle = DecisionEngine(InMemoryVerdictStore(), { DecisionModelClassifier(it, transport = { _, _, _ -> Http.Response(200, """{"answers":{}}""") }) }, metadata = null)
+            .decide(listOf(VideoInfo("ccccccccccc", "", "")), ok).single()
+        assertEquals(Verdict.UNKNOWN, noTitle.verdict)
+        assertFalse(noTitle.checkerFailed)
+        val skipped = DecisionEngine(InMemoryVerdictStore(), { DecisionModelClassifier(it, transport = { _, _, _ -> Http.Response(200, """{"answers":{}}""") }) }, metadata = null)
+            .decide(listOf(dinos), ok).single()
+        assertFalse(skipped.checkerFailed)
+        val down = DecisionEngine(InMemoryVerdictStore(), { DecisionModelClassifier(it, transport = { _, _, _ -> Http.Response(402, "out of credit") }) }, metadata = null)
+            .decide(listOf(dinos), ok).single()
+        assertEquals(Verdict.UNKNOWN, down.verdict)
+        assertTrue(down.checkerFailed)
+    }
+}

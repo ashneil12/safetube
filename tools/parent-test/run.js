@@ -222,7 +222,7 @@ function fakeApp(mode) {
   check('the open video can be hidden in one tap', (await page.textContent('.now-playing')).includes('Wheels on the Bus'));
   check('video titles are shown as text, never as HTML',
     (await page.$$('script')).length === 1 && (await page.textContent('#recent')).includes('<script>'));
-  await page.click('[data-details="POTIONSHOP1"] .thumb');
+  await page.click('.row button.video-preview[data-details="POTIONSHOP1"]');
   await page.waitForTimeout(100);
   check('video detail popup shows reason, score, threshold and honest metadata gap', (await page.textContent('.video-dialog')).includes('Possible scary ride') && (await page.textContent('.video-dialog')).includes('0.4') && (await page.textContent('.video-dialog')).includes('0.25') && (await page.textContent('.video-dialog')).includes('not available here'));
   check('popup escapes remote title markup', await page.locator('.video-dialog script').count() === 0);
@@ -230,12 +230,18 @@ function fakeApp(mode) {
   await page.click('[data-watch]');
   check('preview uses protected native link bridge', (await log(page)).includes('open https://www.youtube.com/watch?v=POTIONSHOP1'));
   await page.click('.video-dialog [data-close]');
+  await page.click('.row button.video-preview[data-details="POTIONSHOP1"]');
+  await page.waitForSelector('.video-dialog [data-allow-like]');
+  await page.click('.video-dialog [data-allow-like]');
+  check('allow videos like this allows it and adds a fine-tune line for similar videos',
+    (await log(page)).includes('allow POTIONSHOP1') &&
+    (await page.evaluate(() => (window.__settings && window.__settings.exceptions) || '')).includes('Videos like “'));
   await page.evaluate(() => {
     HTMLDialogElement.prototype.showModal = undefined;
     HTMLDialogElement.prototype.close = undefined;
     window.SafeTubeParent.call = (name, args, id) => setTimeout(() => window.__parent.done(id, JSON.stringify({ title: '', channel: '', error: 'Offline' })), 1);
   });
-  await page.click('[data-details="POTIONSHOP1"] .thumb');
+  await page.click('.row button.video-preview[data-details="POTIONSHOP1"]');
   await page.waitForTimeout(100);
   check('older WebViews have an accessible popup fallback preserving known metadata offline', await page.isVisible('.legacy-dialog') && (await page.textContent('.video-dialog')).includes('The Little Potion Shop'));
   await page.click('.video-dialog [data-close]');
@@ -280,6 +286,11 @@ function fakeApp(mode) {
   await page.dispatchEvent('#allowedContent', 'change');
   check('hub supports editable only-show and exceptions', (await page.evaluate(() => window.__settings.allowedContent)) === 'Planet Coaster and science' && (await page.evaluate(() => window.__settings.exceptions)).includes('age appropriate'));
   check('what-to-hide page opens', (await page.textContent('h1')) === 'What to hide');
+  await page.fill('#allowedContent', 'Christian content');
+  await page.waitForTimeout(1000);
+  check('only-show text is saved while typing, without leaving the box', (await page.evaluate(() => window.__settings.allowedContent)) === 'Christian content');
+  await page.fill('#allowedContent', 'Planet Coaster and science');
+  await page.dispatchEvent('#allowedContent', 'change');
   await page.fill('.chip-input', 'ghost');
   await page.press('.chip-input', 'Enter');
   check('typing a keyword adds it', (await page.evaluate(() => window.__settings.keywords)).includes('ghost'));
@@ -361,7 +372,7 @@ function fakeApp(mode) {
   check('phone rules including presets do not overflow', await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   await shot(page, '11-phone-rules');
   await page.click('[data-page="overview"]');
-  await page.click('[data-details="POTIONSHOP1"] .thumb');
+  await page.click('.row button.video-preview[data-details="POTIONSHOP1"]');
   await page.waitForTimeout(100);
   check('phone detail popup fits the viewport', await page.evaluate(() => document.querySelector('.video-dialog').getBoundingClientRect().width <= innerWidth));
   await shot(page, '12-phone-video-details');

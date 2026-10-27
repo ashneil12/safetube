@@ -594,7 +594,7 @@ final class OpenRouterAndRequestBudgetTests: XCTestCase {
         XCTAssertEqual(scores.count, 1)
         XCTAssertEqual(scores.first?.id, videos(1, heavy: false)[0].id)
         XCTAssertEqual(Strictness.strict.verdictFor(try XCTUnwrap(scores.first?.p)), .block)
-        XCTAssertTrue(scores.first?.reason.contains("does not supply a detailed explanation") ?? false)
+        XCTAssertTrue(scores.first?.reason.contains("hide rules") ?? false)
         XCTAssertFalse(scores.first?.reason.contains("looks fine") ?? true)
     }
 }
@@ -635,5 +635,60 @@ extension OpenRouterAndRequestBudgetTests {
         XCTAssertEqual(changed.outageConfigHash(), settings.outageConfigHash())
         changed = settings; changed.blockedKeywords = ["coaster"]
         XCTAssertEqual(changed.outageConfigHash(), settings.outageConfigHash())
+    }
+}
+
+final class OnlyShowDecisionTests: XCTestCase {
+    let config = ProviderConfig(.openRouterDecisions, apiKey: "test-key")
+    let dinos = VideoInfo("aaaaaaaaaaa", "Five Little Dinos | Kids Songs", "Toddler Tunes")
+    let hymn = VideoInfo("bbbbbbbbbbb", "Jesus Loves Me | Bible Songs for Kids", "Sunday Sing")
+
+    func testOnlyShowAsksASeparateFitQuestionAndHidesHarmlessOffTopicVideos() throws {
+        var sent: [String: Any]?
+        let c = DecisionModelClassifier(config, transport: { _, _, body in
+            sent = JSON.object(body)
+            return Http.Response(code: 200, body: #"{"answers":{"v1":{"noul":0.02},"s1":{"noul":0.05},"v2":{"noul":0.01},"s2":{"noul":0.97}}}"#)
+        })
+        let settings = FilterSettings(rules: "Nothing scary", provider: config, allowedContent: "Christian content")
+        let scores = Dictionary(uniqueKeysWithValues: try c.classify([dinos, hymn], settings: settings).map { ($0.id, $0) })
+        let state = try XCTUnwrap(sent?["state"] as? [String: Any])
+        XCTAssertEqual(state["only_show"] as? String, "Christian content")
+        XCTAssertFalse((state["parent_rules"] as? String ?? "").contains("ONLY SHOW"))
+        let q = try XCTUnwrap(sent?["questions"] as? [String: Any])
+        XCTAssertNotNil(q["s1"]); XCTAssertNotNil(q["v1"])
+        XCTAssertEqual(Strictness.balanced.verdictFor(try XCTUnwrap(scores[dinos.id]).p), .block)
+        XCTAssertTrue(try XCTUnwrap(scores[dinos.id]).reason.contains("Christian content"))
+        XCTAssertEqual(Strictness.balanced.verdictFor(try XCTUnwrap(scores[hymn.id]).p), .allow)
+    }
+
+    func testOnlyShowWithoutHideRulesAsksJustTheFitQuestion() throws {
+        let c = DecisionModelClassifier(config, transport: { _, _, body in
+            let q = JSON.object(body)?["questions"] as? [String: Any] ?? [:]
+            XCTAssertNil(q["v1"]); XCTAssertNotNil(q["s1"])
+            return Http.Response(code: 200, body: #"{"answers":{"s1":{"noul":0.1}}}"#)
+        })
+        let scores = try c.classify([dinos], settings: FilterSettings(rules: "", provider: config, allowedContent: "Bible stories"))
+        XCTAssertEqual(try XCTUnwrap(scores.first).p, 0.9, accuracy: 1e-9)
+    }
+
+    func testAMissingFitAnswerIsNeverAnAllowance() throws {
+        let c = DecisionModelClassifier(config, transport: { _, _, _ in Http.Response(code: 200, body: #"{"answers":{"v1":{"noul":0.0}}}"#) })
+        XCTAssertTrue(try c.classify([dinos], settings: FilterSettings(rules: "x", provider: config, allowedContent: "Bible stories")).isEmpty)
+    }
+
+    func testOneUnreadableVideoIsNotACheckerOutageButARefusedRequestIs() {
+        let ok = FilterSettings(rules: "No scary content", provider: config)
+        func engine(_ code: Int, _ body: String) -> DecisionEngine {
+            DecisionEngine(InMemoryVerdictStore(), classifierFactory: { cfg in
+                DecisionModelClassifier(cfg, transport: { _, _, _ in Http.Response(code: code, body: body) })
+            }, metadata: nil)
+        }
+        let noTitle = engine(200, #"{"answers":{}}"#).decide([VideoInfo("ccccccccccc", "", "")], ok)
+        XCTAssertEqual(noTitle.first?.verdict, .unknown)
+        XCTAssertEqual(noTitle.first?.checkerFailed, false)
+        XCTAssertEqual(engine(200, #"{"answers":{}}"#).decide([dinos], ok).first?.checkerFailed, false)
+        let down = engine(402, "out of credit").decide([dinos], ok)
+        XCTAssertEqual(down.first?.verdict, .unknown)
+        XCTAssertEqual(down.first?.checkerFailed, true)
     }
 }

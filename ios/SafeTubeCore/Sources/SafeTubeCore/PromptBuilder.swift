@@ -4,7 +4,7 @@ import Foundation
 /// The text is identical to core/PromptBuilder.kt; keep the two in step.
 public enum PromptBuilder {
     /// Bump when the prompt changes in a way that should invalidate cached scores.
-    public static let version = 2
+    public static let version = 3
 
     public static let system = """
         You are the content filter inside a parental-control app for YouTube.

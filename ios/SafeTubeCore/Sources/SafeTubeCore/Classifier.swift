@@ -25,6 +25,14 @@ public struct ClassifierException: Error, CustomStringConvertible, LocalizedErro
 public protocol VideoClassifier {
     /// Scores a batch of videos. May return fewer scores than videos if the model skipped some.
     func classify(_ videos: [VideoInfo], rules: String) throws -> [Score]
+    /// Scores a batch against the parent's full settings. Providers that can ask sharper questions override this.
+    func classify(_ videos: [VideoInfo], settings: FilterSettings) throws -> [Score]
+}
+
+public extension VideoClassifier {
+    func classify(_ videos: [VideoInfo], settings: FilterSettings) throws -> [Score] {
+        try classify(videos, rules: settings.effectiveRules())
+    }
 }
 
 public enum Classifiers {
