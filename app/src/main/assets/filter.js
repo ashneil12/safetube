@@ -171,7 +171,11 @@
   var flushTimer = null;
   var scanScheduled = false;
   var viewportScanTimer = null;
-  var PREFETCH_MARGIN_PX = 240;
+  // Check ahead of the scroll: this many screens below and one above. Videos are asked about
+  // while the child is still looking at the ones before them, so they appear already checked.
+  var PREFETCH_SCREENS_BELOW = 4;
+  var PREFETCH_SCREENS_ABOVE = 1;
+  var PREFETCH_MARGIN_PX = 240; // sideways, for carousels
   var RETRY_MS = 20000;
   var INFLIGHT_TIMEOUT_MS = 45000;
 
@@ -312,8 +316,14 @@
     var width = window.innerWidth || document.documentElement.clientWidth;
     var height = window.innerHeight || document.documentElement.clientHeight;
     return rect.width > 0 && rect.height > 0 &&
-      rect.bottom >= -PREFETCH_MARGIN_PX && rect.top <= height + PREFETCH_MARGIN_PX &&
+      rect.bottom >= -PREFETCH_SCREENS_ABOVE * height && rect.top <= height * (1 + PREFETCH_SCREENS_BELOW) &&
       rect.right >= -PREFETCH_MARGIN_PX && rect.left <= width + PREFETCH_MARGIN_PX;
+  }
+
+  function onScreen(el) {
+    if (!el || !el.getBoundingClientRect) return false;
+    var r = el.getBoundingClientRect();
+    return r.bottom > 0 && r.top < (window.innerHeight || document.documentElement.clientHeight);
   }
 
   function need(video, priority, target) {
@@ -329,7 +339,8 @@
     }
     var prev = queued[id];
     if (!prev || (!prev.title && video.title)) queued[id] = video;
-    scheduleFlush(priority ? 0 : 80);
+    // Cards on screen go out almost at once; the ones ahead can wait a moment to travel together.
+    scheduleFlush(priority ? 0 : (onScreen(target) ? 25 : 90));
   }
 
   function scheduleFlush(delay) {

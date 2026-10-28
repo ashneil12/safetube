@@ -12,8 +12,8 @@ android {
         // Fire OS 5 (2015 Fire tablets) is API 22.
         minSdk = 22
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.6.2"
+        versionCode = 10
+        versionName = "0.6.3"
     }
 
     signingConfigs {
