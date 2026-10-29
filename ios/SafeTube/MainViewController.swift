@@ -189,7 +189,10 @@ final class MainViewController: UIViewController, WKNavigationDelegate, WKUIDele
     }
 
     @objc private func rememberPage() {
-        if let url = webView?.url, MainViewController.isYouTubeHost(url.host) { prefs.rememberPage(url.absoluteString) }
+        // A game page is never resumed: coming back always starts at the home page.
+        if let url = webView?.url, MainViewController.isYouTubeHost(url.host) {
+            prefs.rememberPage(MainViewController.isGamePath(url.path) ? MainViewController.startUrl.absoluteString : url.absoluteString)
+        }
     }
 
     override func viewDidAppear(_ animated: Bool) {
