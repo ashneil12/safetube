@@ -32,6 +32,14 @@ function check(name, cond) {
       res.writeHead(200, { 'content-type': 'text/html' });
       res.end(fs.readFileSync(path.join(__dirname, 'demand-youtube.html'), 'utf8')); return;
     }
+    if (req.url.startsWith('/playables/')) {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end('<html><body><p id="game">A game</p></body></html>'); return;
+    }
+    if (req.url === '/games-shelf') {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end('<html><body><ytm-rich-section-renderer id="shelf"><a id="game-link" href="/playables/abc">Play</a></ytm-rich-section-renderer><div id="other">Other</div></body></html>'); return;
+    }
     if (req.url.startsWith('/watch?isolated=')) {
       res.writeHead(200, { 'content-type': 'text/html' });
       res.end('<html><body><div id="player"><video></video></div></body></html>'); return;
@@ -334,6 +342,20 @@ function check(name, cond) {
   await lockedBoot.evaluate(() => { window.__safetube.setAiUnavailable(false); window.__safetube.apply({ WHEELSBUS01: 'allow' }); });
   check('fresh successful retry can unlock an isolated direct watch page', await lockedBoot.locator('#st-overlay').count() === 0 && await lockedBoot.locator('#player').isVisible());
   await lockedBoot.close();
+  for (const blockGames of [true, false]) {
+    const g = await browser.newPage();
+    await g.addInitScript((on) => { window.SafeTubeAndroid = { config: () => JSON.stringify({ blockGames: on }), submit: () => {} }; }, blockGames);
+    await g.addInitScript(FILTER);
+    await g.goto(base + '/games-shelf');
+    await g.waitForTimeout(150);
+    const shown = await g.$eval('#game-link', (el) => getComputedStyle(el).display !== 'none');
+    check(blockGames ? 'games switch on: game links and their shelf are hidden' : 'games switch off: game links stay', shown === !blockGames);
+    await g.goto(base + '/playables/abc');
+    await g.waitForTimeout(250);
+    const stayed = new URL(g.url()).pathname.startsWith('/playables');
+    check(blockGames ? 'games switch on: a game page sends the child to the home page' : 'games switch off: a game page opens', stayed === !blockGames);
+    await g.close();
+  }
   await require('./demand')({ browser, base, filter: FILTER, check });
   await browser.close();
   server.close();

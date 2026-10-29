@@ -25,7 +25,7 @@ function fakeApp(mode) {
     rules: 'Nothing scary.', keywords: ['halloween', 'witch'], strictness: 'STRICT',
     provider: { type: 'NONE', accountId: '', apiKey: '', baseUrl: 'https://openrouter.ai/api/v1', model: '', sendThumbnails: true },
     helper: { type: 'NONE', apiKey: '', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.5-flash' },
-    hideShorts: true, hideComments: true, kidsCanBlock: true, blockAds: true,
+    hideShorts: true, hideComments: true, kidsCanBlock: true, blockAds: true, blockGames: true,
     noAutoplay: true, restrictedMode: false, keepHistory: true,
     dailyLimitMin: 0, bedtimeOn: false, bedtimeStart: '19:30', bedtimeEnd: '07:00',
   };
@@ -162,7 +162,8 @@ function fakeApp(mode) {
   check('step 3 is time and extras', (await page.textContent('h1')) === 'Time and extras');
   check('ads and autoplay start switched off for the child',
     (await page.getAttribute('[data-switch="blockAds"]', 'aria-checked')) === 'true' &&
-    (await page.getAttribute('[data-switch="noAutoplay"]', 'aria-checked')) === 'true');
+    (await page.getAttribute('[data-switch="noAutoplay"]', 'aria-checked')) === 'true' &&
+    (await page.getAttribute('[data-switch="blockGames"]', 'aria-checked')) === 'true');
   await page.click('[data-limit="60"]');
   await page.click('[data-switch="bedtimeOn"]');
   check('bedtime times appear when bedtime is on', await page.isVisible('[data-time="bedtimeStart"]'));

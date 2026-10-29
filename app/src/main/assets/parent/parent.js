@@ -856,6 +856,7 @@
   function extraSwitches() {
     return `
       ${switchRow('blockAds', 'Block ads', 'Skips video ads and hides ads between videos.')}
+      ${switchRow('blockGames', 'Block YouTube games', 'Hides YouTube’s built-in games and keeps them from opening.')}
       ${switchRow('noAutoplay', 'No autoplay', 'When a video ends, YouTube doesn’t start another one by itself.')}
       ${switchRow('hideShorts', 'Hide Shorts', 'Short videos open in the normal player instead.')}
       ${switchRow('hideComments', 'Hide comments')}

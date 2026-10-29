@@ -213,6 +213,9 @@ class FilterBridge(
             return h == "youtube.com" || h.endsWith(".youtube.com")
         }
 
+        /** YouTube's built-in games live under /playables. */
+        fun isGamePath(path: String?): Boolean = path?.lowercase()?.startsWith("/playables") == true
+
         fun hostOf(url: String?): String = url?.let { Uri.parse(it).host } ?: ""
     }
 }

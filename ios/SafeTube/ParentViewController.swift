@@ -308,6 +308,7 @@ final class ParentViewController: UIViewController, WKNavigationDelegate, WKUIDe
         prefs.hideComments = JSON.optBool(o, "hideComments", true)
         prefs.kidsCanBlock = JSON.optBool(o, "kidsCanBlock", true)
         prefs.blockAds = JSON.optBool(o, "blockAds", true)
+        prefs.blockGames = JSON.optBool(o, "blockGames", true)
         prefs.noAutoplay = JSON.optBool(o, "noAutoplay", true)
         prefs.restrictedMode = JSON.optBool(o, "restrictedMode", false)
         prefs.keepHistory = JSON.optBool(o, "keepHistory", true)
@@ -382,6 +383,7 @@ final class ParentViewController: UIViewController, WKNavigationDelegate, WKUIDe
             "hideComments": prefs.hideComments,
             "kidsCanBlock": prefs.kidsCanBlock,
             "blockAds": prefs.blockAds,
+            "blockGames": prefs.blockGames,
             "noAutoplay": prefs.noAutoplay,
             "restrictedMode": prefs.restrictedMode,
             "keepHistory": prefs.keepHistory,
