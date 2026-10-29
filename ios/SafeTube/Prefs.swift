@@ -176,6 +176,12 @@ final class Prefs {
         version += 1
     }
 
+    /// YouTube's built-in games (Playables): hidden, and their pages refuse to open.
+    var blockGames: Bool {
+        get { bool("blockGames", true) }
+        set { sp.set(newValue, forKey: "blockGames") }
+    }
+
     /// Stop YouTube moving on to another video by itself when one ends.
     var noAutoplay: Bool {
         get { bool("noAutoplay", true) }
@@ -354,6 +360,7 @@ final class Prefs {
             "blockMenu": true,
             "kidsCanBlock": kidsCanBlock,
             "blockAds": blockAds,
+            "blockGames": blockGames,
             "noAutoplay": noAutoplay,
             "keepHistory": keepHistory,
             "debug": false,

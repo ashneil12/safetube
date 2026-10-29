@@ -21,7 +21,7 @@
   if (window.__safetube) return;
 
   var bridge = window.SafeTubeAndroid || null;
-  var cfg = { hideShorts: true, hideComments: true, blockMenu: true, kidsCanBlock: true, blockAds: true, noAutoplay: true, keepHistory: true, debug: false };
+  var cfg = { hideShorts: true, hideComments: true, blockMenu: true, kidsCanBlock: true, blockAds: true, blockGames: true, noAutoplay: true, keepHistory: true, debug: false };
   try { if (bridge) Object.assign(cfg, JSON.parse(bridge.config())); } catch (e) {}
 
   // ---------------------------------------------------------------- ads
@@ -202,6 +202,12 @@
     if (cfg.hideShorts) rules.push(SHORTS_SEL + '{display:none!important}');
     if (cfg.hideComments) rules.push(COMMENTS_SEL + '{display:none!important}');
     if (cfg.noAutoplay) rules.push(AUTOPLAY_SEL + '{display:none!important}');
+    if (cfg.blockGames) {
+      // YouTube's built-in games: their links, and whole shelves that hold them. Separate rules,
+      // so a browser that doesn't know :has() still applies the first one.
+      rules.push('a[href*="/playables"],[class*="playables" i]{display:none!important}');
+      rules.push('ytm-rich-section-renderer:has(a[href*="/playables"]),ytm-item-section-renderer:has(a[href*="/playables"]),ytm-shelf-renderer:has(a[href*="/playables"]){display:none!important}');
+    }
     rules.push(
       // SafeTube's few screens copy YouTube's own look so they blend in.
       '#st-overlay{position:fixed;inset:0;z-index:2147483647;display:flex;flex-direction:column;' +
@@ -497,6 +503,11 @@
 
   function checkWatchPage() {
     var html = document.documentElement;
+    if (cfg.blockGames && location.pathname.toLowerCase().indexOf('/playables') === 0) {
+      // A game opened some other way (a shared link, YouTube's own scripts): back to the home page.
+      location.replace('/');
+      return;
+    }
     if (aiUnavailable) {
       lockPage();
       var retryId = currentWatchId();

@@ -59,6 +59,8 @@ class MainActivity : Activity() {
     private var pendingBlock: FilterBridge.BlockRequest? = null
     /** Read on WebView's network thread, so kept in a field rather than read from prefs each time. */
     @Volatile private var blockAds = true
+    private var blockGames = true
+    private lateinit var closeGame: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -72,6 +74,9 @@ class MainActivity : Activity() {
         setUpWebView()
         seenVersion = prefs.version
         blockAds = prefs.blockAds
+        blockGames = prefs.blockGames
+        closeGame = buildCloseGame()
+        root.addView(closeGame, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.END).apply { setMargins(0, 24, 24, 0) })
 
         if (!prefs.hasPin) {
             startActivity(Intent(this, ParentActivity::class.java).putExtra(ParentActivity.EXTRA_SETUP, true))
@@ -151,6 +156,7 @@ class MainActivity : Activity() {
         super.onResume()
         webView.onResume()
         blockAds = prefs.blockAds
+        blockGames = prefs.blockGames
         if (prefs.version != seenVersion) {
             // Settings changed: the page forgets its decisions and re-checks what's on screen.
             seenVersion = prefs.version
@@ -274,6 +280,18 @@ class MainActivity : Activity() {
             return WebResourceResponse("text/plain", "utf-8", 204, "No Content", emptyMap(), ByteArrayInputStream(ByteArray(0)))
         }
 
+        /** Also fires for YouTube's in-page navigation, which never goes through shouldOverrideUrlLoading. */
+        override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+            bridge.currentHost = FilterBridge.hostOf(url)
+            val onGame = FilterBridge.isGamePath(url?.let { Uri.parse(it).path })
+            if (onGame && blockGames) {
+                toast("Games are turned off")
+                view.loadUrl(START_URL)
+                return
+            }
+            closeGame.visibility = if (onGame) View.VISIBLE else View.GONE
+        }
+
         override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
             bridge.pageStarted()
             bridge.currentHost = FilterBridge.hostOf(url)
@@ -315,10 +333,6 @@ class MainActivity : Activity() {
             webView.loadUrl(url?.takeIf { FilterBridge.isYouTubeHost(FilterBridge.hostOf(it)) } ?: START_URL)
             return true
         }
-
-        override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
-            bridge.currentHost = FilterBridge.hostOf(url)
-        }
     }
 
     private fun injectScript(view: WebView) {
@@ -336,7 +350,13 @@ class MainActivity : Activity() {
             webView.loadUrl("https://m.youtube.com/watch?v=$id")
             return false
         }
-        if (FilterBridge.isYouTubeHost(host)) return true
+        if (FilterBridge.isYouTubeHost(host)) {
+            if (blockGames && FilterBridge.isGamePath(uri.path)) {
+                toast("Games are turned off")
+                return false
+            }
+            return true
+        }
         if (isSignInPage(host, uri.path ?: "")) return true
         toast("Links outside YouTube are turned off")
         return false
@@ -381,6 +401,23 @@ class MainActivity : Activity() {
     }
 
     // ------------------------------------------------------------------ chrome around the page
+
+    /**
+     * YouTube's own close button for a game doesn't always work inside an app, so a game always
+     * gets one more way out: this button takes the child back to the YouTube home page.
+     */
+    private fun buildCloseGame(): TextView = TextView(this).apply {
+        text = "✕  Close game"
+        setTextColor(Color.WHITE)
+        textSize = 16f
+        setPadding(40, 24, 40, 24)
+        setBackgroundColor(0xCC000000.toInt())
+        visibility = View.GONE
+        setOnClickListener {
+            visibility = View.GONE
+            webView.loadUrl(START_URL)
+        }
+    }
 
     private fun buildCover(): View = FrameLayout(this).apply {
         setBackgroundColor(Color.WHITE)

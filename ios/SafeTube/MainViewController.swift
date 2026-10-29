@@ -30,6 +30,8 @@ final class MainViewController: UIViewController, WKNavigationDelegate, WKUIDele
 
     private var webView: WKWebView!
     private let cover = UIView()
+    private let closeGame = UIButton(type: .system)
+    private var urlObservation: NSKeyValueObservation?
     private var filterScript = ""
     private var seenVersion = -1
     private var aiUnavailable: Bool {
@@ -82,7 +84,32 @@ final class MainViewController: UIViewController, WKNavigationDelegate, WKUIDele
         cover.addSubview(spinner)
         view.addSubview(cover)
 
+        // YouTube's own close button for a game doesn't always work inside an app, so a game
+        // always has one more way out: this button returns to the YouTube home page.
+        closeGame.setTitle("✕  Close game", for: .normal)
+        closeGame.setTitleColor(.white, for: .normal)
+        closeGame.titleLabel?.font = .systemFont(ofSize: 16, weight: .semibold)
+        closeGame.backgroundColor = UIColor.black.withAlphaComponent(0.8)
+        closeGame.layer.cornerRadius = 8
+        closeGame.contentEdgeInsets = UIEdgeInsets(top: 10, left: 16, bottom: 10, right: 16)
+        closeGame.isHidden = true
+        closeGame.translatesAutoresizingMaskIntoConstraints = false
+        closeGame.addTarget(self, action: #selector(closeGameTapped), for: .touchUpInside)
+        view.addSubview(closeGame)
+        urlObservation = webView.observe(\.url, options: [.new]) { [weak self] web, _ in
+            guard let self = self else { return }
+            let onGame = MainViewController.isYouTubeHost(web.url?.host) && MainViewController.isGamePath(web.url?.path ?? "")
+            if onGame && self.prefs.blockGames {
+                self.toast("Games are turned off")
+                web.load(URLRequest(url: MainViewController.startUrl))
+                return
+            }
+            self.closeGame.isHidden = !onGame
+        }
+
         NSLayoutConstraint.activate([
+            closeGame.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
+            closeGame.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
             webView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
@@ -549,11 +576,20 @@ final class MainViewController: UIViewController, WKNavigationDelegate, WKUIDele
             if let watch = URL(string: "https://m.youtube.com/watch?v=\(id)") { webView.load(URLRequest(url: watch)) }
             return false
         }
-        if MainViewController.isYouTubeHost(host) { return true }
+        if MainViewController.isYouTubeHost(host) {
+            if prefs.blockGames && MainViewController.isGamePath(url.path) {
+                toast("Games are turned off")
+                return false
+            }
+            return true
+        }
         if MainViewController.isSignInPage(host, url.path) { return true }
         toast("Links outside YouTube are turned off")
         return false
     }
+
+    /// YouTube's built-in games live under /playables.
+    static func isGamePath(_ path: String) -> Bool { path.lowercased().hasPrefix("/playables") }
 
     static func isYouTubeHost(_ host: String?) -> Bool {
         guard let h = host?.lowercased() else { return false }
@@ -662,6 +698,11 @@ final class MainViewController: UIViewController, WKNavigationDelegate, WKUIDele
         if let last = lastErrorToast, Date().timeIntervalSince(last) < 60 { return }
         lastErrorToast = Date()
         toast("Some videos are hidden because the AI check failed: \(String(reason.prefix(120)))")
+    }
+
+    @objc private func closeGameTapped() {
+        closeGame.isHidden = true
+        webView.load(URLRequest(url: MainViewController.startUrl))
     }
 
     private func toast(_ message: String) { Toast.show(message, in: view) }

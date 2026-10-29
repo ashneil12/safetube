@@ -127,6 +127,11 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("blockAds", true)
         set(v) = sp.edit().putBoolean("blockAds", v).apply()
 
+    /** YouTube's built-in games (Playables): hidden, and their pages refuse to open. */
+    var blockGames: Boolean
+        get() = sp.getBoolean("blockGames", true)
+        set(v) = sp.edit().putBoolean("blockGames", v).apply()
+
     var hideComments: Boolean
         get() = sp.getBoolean("hideComments", true)
         set(v) = sp.edit().putBoolean("hideComments", v).apply()
@@ -286,6 +291,7 @@ class Prefs(context: Context) {
         .put("blockMenu", true)
         .put("kidsCanBlock", kidsCanBlock)
         .put("blockAds", blockAds)
+        .put("blockGames", blockGames)
         .put("noAutoplay", noAutoplay)
         .put("keepHistory", keepHistory)
         .put("debug", BuildConfigFlags.DEBUG)
