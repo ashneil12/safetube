@@ -235,14 +235,15 @@ class MainActivity : Activity() {
     override fun onPause() {
         countTime()
         ticker.removeCallbacks(tick)
-        webView.url?.let { prefs.rememberPage(it) }
+        // A game page is never resumed: coming back always starts at the home page.
+        webView.url?.let { prefs.rememberPage(if (FilterBridge.isGamePath(Uri.parse(it).path)) START_URL else it) }
         webView.onPause()
         super.onPause()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
-        webView.saveState(outState)
+        if (!FilterBridge.isGamePath(webView.url?.let { Uri.parse(it).path })) webView.saveState(outState)
     }
 
     override fun onDestroy() {
