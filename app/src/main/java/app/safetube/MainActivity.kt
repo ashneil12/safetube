@@ -282,6 +282,7 @@ class MainActivity : Activity() {
 
         /** Also fires for YouTube's in-page navigation, which never goes through shouldOverrideUrlLoading. */
         override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+            bridge.currentHost = FilterBridge.hostOf(url)
             val onGame = FilterBridge.isGamePath(url?.let { Uri.parse(it).path })
             if (onGame && blockGames) {
                 toast("Games are turned off")
@@ -331,10 +332,6 @@ class MainActivity : Activity() {
             setUpWebView()
             webView.loadUrl(url?.takeIf { FilterBridge.isYouTubeHost(FilterBridge.hostOf(it)) } ?: START_URL)
             return true
-        }
-
-        override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
-            bridge.currentHost = FilterBridge.hostOf(url)
         }
     }
 
