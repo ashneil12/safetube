@@ -40,7 +40,7 @@ function check(name, cond) {
       res.writeHead(200, { 'content-type': 'text/html' });
       res.end('<html><body><ytm-rich-section-renderer id="shelf"><a id="game-link" href="/playables/abc">Play</a></ytm-rich-section-renderer><div id="other">Other</div></body></html>'); return;
     }
-    if (req.url.startsWith('/watch?isolated=')) {
+    if (req.url.startsWith('/watch?isolated=') || /^\/(embed|v|watch)\//.test(req.url)) {
       res.writeHead(200, { 'content-type': 'text/html' });
       res.end('<html><body><div id="player"><video></video></div></body></html>'); return;
     }
@@ -356,6 +356,7 @@ function check(name, cond) {
     check(blockGames ? 'games switch on: a game page sends the child to the home page' : 'games switch off: a game page opens', stayed === !blockGames);
     await g.close();
   }
+  await require('./watch-paths')({ browser, base, filter: FILTER, check });
   await require('./demand')({ browser, base, filter: FILTER, check });
   await browser.close();
   server.close();
