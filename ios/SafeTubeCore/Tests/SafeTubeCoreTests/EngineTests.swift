@@ -175,6 +175,9 @@ final class BlockingAndDecisionModelTests: XCTestCase {
         XCTAssertEqual(VideoLinks.videoId("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=10"), "dQw4w9WgXcQ")
         XCTAssertEqual(VideoLinks.videoId("https://youtu.be/dQw4w9WgXcQ?si=abc"), "dQw4w9WgXcQ")
         XCTAssertEqual(VideoLinks.videoId("https://youtube.com/shorts/dQw4w9WgXcQ"), "dQw4w9WgXcQ")
+        XCTAssertEqual(VideoLinks.videoId("https://www.youtube.com/embed/dQw4w9WgXcQ"), "dQw4w9WgXcQ")
+        XCTAssertEqual(VideoLinks.videoId("https://www.youtube.com/v/dQw4w9WgXcQ"), "dQw4w9WgXcQ")
+        XCTAssertEqual(VideoLinks.videoId("https://www.youtube.com/watch/dQw4w9WgXcQ"), "dQw4w9WgXcQ")
         XCTAssertEqual(VideoLinks.videoId("dQw4w9WgXcQ"), "dQw4w9WgXcQ")
         XCTAssertNil(VideoLinks.videoId("https://www.youtube.com/@SuperSimpleSongs"))
     }

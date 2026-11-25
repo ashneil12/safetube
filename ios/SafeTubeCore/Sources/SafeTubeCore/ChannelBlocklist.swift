@@ -61,10 +61,11 @@ public final class ChannelBlocklist {
 
 /// Pulls a video id out of anything a parent might paste: a watch link, a short link, a Shorts link or a bare id.
 public enum VideoLinks {
+    // The same playable shapes filter.js treats as video pages, so a parent can hide whatever the child opened.
     private static let patterns = [
         Re.make("[?&]v=([A-Za-z0-9_-]{11})"),
         Re.make("youtu\\.be/([A-Za-z0-9_-]{11})"),
-        Re.make("/(?:shorts|live|embed)/([A-Za-z0-9_-]{11})"),
+        Re.make("/(?:shorts|live|embed|v|watch)/([A-Za-z0-9_-]{11})"),
     ]
 
     public static func videoId(_ input: String) -> String? {
