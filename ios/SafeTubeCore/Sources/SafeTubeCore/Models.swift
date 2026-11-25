@@ -232,8 +232,24 @@ public struct FilterSettings {
     public func outageConfigHash() -> String { configHash(includeRequestFormat: false) }
 
     private func configHash(includeRequestFormat: Bool) -> String {
-        let parts = [effectiveRules(), provider.cacheIdentity(includeRequestFormat: includeRequestFormat),
+        var parts = [effectiveRules(), provider.cacheIdentity(includeRequestFormat: includeRequestFormat),
             fallbackProvider.cacheIdentity(includeRequestFormat: includeRequestFormat), String(PromptBuilder.version)]
+        // Scores a decision model produced before its ONLY SHOW question required positive
+        // evidence of eligibility must not be reused: generic off-topic videos could have
+        // been cached as allowed. Like the Clef state version this is a request-semantics
+        // upgrade, not a parent policy change, so the outage latch deliberately survives it.
+        // Absent entirely (not even an empty element) for everyone else, so their cached
+        // scores and hashes are bit-for-bit unchanged.
+        if includeRequestFormat && onlyShowDecisionSemanticsApply {
+            parts.append(FilterSettings.onlyShowDecisionSemanticsVersion)
+        }
         return String(Hashing.sha256(parts.joined(separator: "\u{0}")).prefix(16))
     }
+
+    private var onlyShowDecisionSemanticsApply: Bool {
+        !allowedContent.isBlank && (provider.isDecisionModel || fallbackProvider.isDecisionModel)
+    }
+
+    /// Bump when the decision-model ONLY SHOW question changes meaning. (Same value as Models.kt.)
+    private static let onlyShowDecisionSemanticsVersion = "only-show-decision-v2"
 }

@@ -18,7 +18,7 @@ final class DecisionEngineTests: XCTestCase {
         var calls = 0
         var seen: [String] = []
         init(_ scores: [String: Double]) { self.scores = scores }
-        func classify(_ videos: [VideoInfo], rules: String) throws -> [Score] {
+        func classify(_ videos: [VideoInfo], rules: String, onlyShow: Bool) throws -> [Score] {
             calls += 1
             seen += videos.map { $0.id }
             return videos.compactMap { v in scores[v.id].map { Score(v.id, $0, "fake") } }
@@ -26,7 +26,7 @@ final class DecisionEngineTests: XCTestCase {
     }
 
     struct Failing: VideoClassifier {
-        func classify(_ videos: [VideoInfo], rules: String) throws -> [Score] { throw ClassifierException("401 invalid key") }
+        func classify(_ videos: [VideoInfo], rules: String, onlyShow: Bool) throws -> [Score] { throw ClassifierException("401 invalid key") }
     }
 
     func engine(_ store: VerdictStore, _ fake: VideoClassifier?, _ metadata: MetadataFetcher? = nil) -> DecisionEngine {
@@ -122,7 +122,7 @@ final class DecisionEngineTests: XCTestCase {
         let lock = NSLock()
         var waiting = 3
         let allIn = DispatchSemaphore(value: 0)
-        func classify(_ videos: [VideoInfo], rules: String) throws -> [Score] {
+        func classify(_ videos: [VideoInfo], rules: String, onlyShow: Bool) throws -> [Score] {
             lock.lock()
             waiting -= 1
             if waiting == 0 { for _ in 0..<3 { allIn.signal() } }
@@ -321,7 +321,7 @@ final class RecoveryAndRuleTests: XCTestCase {
         let scores: [Score]
         let fails: Bool
         init(_ scores: [Score] = [], fails: Bool = false) { self.scores = scores; self.fails = fails }
-        func classify(_ videos: [VideoInfo], rules: String) throws -> [Score] {
+        func classify(_ videos: [VideoInfo], rules: String, onlyShow: Bool) throws -> [Score] {
             seen.append(videos.map { $0.id })
             if fails { throw ClassifierException("quota exhausted") }
             return scores
@@ -393,6 +393,140 @@ final class RecoveryAndRuleTests: XCTestCase {
         s.blockedKeywords = []; store.setOverride(a.id, .block)
         XCTAssertEqual(engine.decide([a], s).first?.source, .parent)
         XCTAssertTrue(fake.seen.isEmpty)
+    }
+}
+
+/// The Only-show-after-Clef regression: a decision model's compressed yes/no criteria used to let
+/// generic child-safe but off-topic videos answer "no violation", so Only show families saw nursery
+/// content the description never covered. Mirrors the Kotlin regressions in core/src/test.
+final class OnlyShowEligibilityTests: XCTestCase {
+    private let nursery = VideoInfo("ddddddddddd", "Wheels On The Bus Nursery Rhymes", "Super Simple Songs")
+    private let coaster = VideoInfo("eeeeeeeeeee", "Planet Coaster park-building tutorial", "Family Builds")
+
+    final class Recording: VideoClassifier {
+        var onlyShowSeen: [Bool] = []
+        let scores: [String: Double]
+        init(_ scores: [String: Double]) { self.scores = scores }
+        func classify(_ videos: [VideoInfo], rules: String, onlyShow: Bool) throws -> [Score] {
+            onlyShowSeen.append(onlyShow)
+            return videos.compactMap { v in scores[v.id].map { Score(v.id, $0, "fake") } }
+        }
+    }
+
+    func testOnlyShowModeReachesTheClassifierExplicitlyRatherThanThroughProseAlone() {
+        let recording = Recording([nursery.id: 0.9])
+        var onlyShow = FilterSettings(rules: "", provider: ProviderConfig(.anthropic, apiKey: "test"), allowedContent: "Planet Coaster")
+        _ = DecisionEngine(InMemoryVerdictStore(), classifierFactory: { _ in recording }, metadata: nil).decide([nursery], onlyShow)
+        onlyShow.allowedContent = ""
+        onlyShow.rules = "No witches"
+        _ = DecisionEngine(InMemoryVerdictStore(), classifierFactory: { _ in recording }, metadata: nil).decide([nursery], onlyShow)
+        XCTAssertEqual(recording.onlyShowSeen, [true, false])
+    }
+
+    func testOnlyShowBlocksAGenericNurseryVideoOnAHighOutsideScoreAndShowsAnInTopicOne() {
+        let fake = Recording([nursery.id: 0.95, coaster.id: 0.02])
+        let settings = FilterSettings(rules: "", provider: ProviderConfig(.anthropic, apiKey: "test"), allowedContent: "Planet Coaster park-building tutorials")
+        let d = DecisionEngine(InMemoryVerdictStore(), classifierFactory: { _ in fake }, metadata: nil).decide([nursery, coaster], settings)
+        XCTAssertEqual(d[0].verdict, .block)
+        XCTAssertEqual(d[1].verdict, .allow)
+    }
+
+    func testOnlyShowCheckerFailureKeepsVideosHiddenRatherThanReopeningThem() {
+        struct Failing: VideoClassifier {
+            func classify(_ videos: [VideoInfo], rules: String, onlyShow: Bool) throws -> [Score] { throw ClassifierException("quota exhausted") }
+        }
+        let settings = FilterSettings(rules: "", provider: ProviderConfig(.anthropic, apiKey: "test"), allowedContent: "Educational science")
+        let d = DecisionEngine(InMemoryVerdictStore(), classifierFactory: { _ in Failing() }, metadata: nil).decide([nursery], settings)
+        XCTAssertEqual(d.first?.verdict, .unknown)
+    }
+
+    func testScoresCachedBeforeAnOnlyShowRuleDoNotBypassIt() {
+        let store = InMemoryVerdictStore()
+        let fake = Recording([nursery.id: 0.0])
+        let engine = DecisionEngine(store, classifierFactory: { _ in fake }, metadata: nil)
+        var settings = FilterSettings(rules: "No witches", provider: ProviderConfig(.anthropic, apiKey: "test"))
+        XCTAssertEqual(engine.decide([nursery], settings).first?.verdict, .allow)
+        XCTAssertEqual(fake.onlyShowSeen.count, 1)
+        settings.allowedContent = "Educational science"
+        _ = engine.decide([nursery], settings)
+        XCTAssertEqual(fake.onlyShowSeen.count, 2)
+    }
+
+    func testOnlyShowRequestsAskTheDisallowedQuestionInsteadOfMereHarmlessness() throws {
+        let classifier = DecisionModelClassifier(ProviderConfig(.openRouterDecisions, apiKey: "test"))
+        let plain = classifier.buildRequest([coaster], rules: "rules")
+        let plainQuestions = try XCTUnwrap(plain["questions"] as? [String: [String: Any]])
+        let plainQ = try XCTUnwrap(plainQuestions["v1"])
+        XCTAssertEqual((plainQ["criteria"] as? [String: String])?["false"], "Nothing about video v1 goes against the parent's rules")
+
+        let req = classifier.buildRequest([coaster], rules: "rules", onlyShow: true)
+        let questions = try XCTUnwrap(req["questions"] as? [String: [String: Any]])
+        let q = try XCTUnwrap(questions["v1"])
+        let instructions = q["instructions"] as? String ?? ""
+        XCTAssertTrue(instructions.hasPrefix("Video v1 can be shown only if the supplied evidence positively places it inside"), instructions)
+        XCTAssertTrue(instructions.contains("Is it disallowed?"), instructions)
+        XCTAssertTrue(instructions.contains("Generic child-safe but off-topic, unrelated, or weakly evidenced content is disallowed"), instructions)
+        let criteria = q["criteria"] as? [String: String] ?? [:]
+        XCTAssertTrue(criteria["true"]?.contains("outside the ONLY SHOW description, not positively established inside it") ?? false)
+        XCTAssertTrue(criteria["false"]?.contains("positively places video v1 inside the ONLY SHOW description") ?? false)
+    }
+
+    func testReportedChristianOnlyNurseryFixtureIsFramedAsAnEligibilityDecisionAndBlocksAtBalanced() throws {
+        let reportedNursery = VideoInfo(
+            "ddddddddddd",
+            "Baa Baa Black Sheep | Animal Sounds for Toddlers",
+            "CoComelon - Nursery Rhymes",
+            context: "Educational songs for kids and toddlers • animals, phonics and learning"
+        )
+        var asked: [String: Any] = [:]
+        let classifier = DecisionModelClassifier(ProviderConfig(.openRouterDecisions, apiKey: "test"), transport: { _, _, body in
+            asked = JSON.object(body) ?? [:]
+            // Representative of the fixed question's live Clef Flash answers for this fixture:
+            // high enough to block at Balanced, unlike the harm-framed mid-range scores.
+            return Http.Response(code: 200, body: #"{"answers":{"v1":{"noul":0.84}}}"#)
+        })
+        let rules = FilterSettings(allowedContent: "all christian content").effectiveRules()
+        let scores = try classifier.classify([reportedNursery], rules: rules, onlyShow: true)
+        XCTAssertEqual(scores.first?.p, 0.84)
+        let questions = try XCTUnwrap(asked["questions"] as? [String: [String: Any]])
+        let q = try XCTUnwrap(questions["v1"])
+        XCTAssertTrue((q["instructions"] as? String ?? "").contains("Is it disallowed?"))
+        XCTAssertTrue(((q["criteria"] as? [String: String])?["false"] ?? "").contains("positively places"))
+        XCTAssertEqual(Strictness.balanced.verdictFor(try XCTUnwrap(scores.first?.p)), .block)
+    }
+
+    func testMissingAnswersUnderOnlyShowFailClosed() throws {
+        let classifier = DecisionModelClassifier(ProviderConfig(.openRouterDecisions, apiKey: "test"), transport: { _, _, _ in
+            Http.Response(code: 200, body: #"{"answers":{}}"#)
+        })
+        XCTAssertTrue(try classifier.classify([coaster], rules: "ONLY SHOW x", onlyShow: true).isEmpty)
+    }
+
+    func testOnlyShowDecisionScoresCachedBeforeTheEligibilityFixAreInvalidated() {
+        func oldIdentity(_ p: ProviderConfig) -> String {
+            [p.type.rawValue, p.baseUrl.trimmed, p.modelOrDefault(), p.accountId.trimmed,
+                Hashing.sha256(p.apiKey), String(p.usesThumbnails)].joined(separator: "\u{0}")
+        }
+        func previousHash(_ s: FilterSettings) -> String {
+            let parts = [s.effectiveRules(), oldIdentity(s.provider), oldIdentity(s.fallbackProvider), String(PromptBuilder.version)]
+            return String(Hashing.sha256(parts.joined(separator: "\u{0}")).prefix(16))
+        }
+        // Jev carries no Clef state-version marker, so any hash change here comes only
+        // from the only-show eligibility semantics.
+        let jev = ProviderConfig(.jev, apiKey: "test-key")
+        let onlyShow = FilterSettings(rules: "", provider: jev, allowedContent: "Planet Coaster")
+        XCTAssertNotEqual(previousHash(onlyShow), onlyShow.aiConfigHash())
+        // The same upgrade is not a parent policy change: an in-progress outage survives it.
+        XCTAssertEqual(previousHash(onlyShow), onlyShow.outageConfigHash())
+        // Chat-provider only-show rules are unaffected: the chat prompt semantics did not change.
+        var chat = onlyShow; chat.provider = ProviderConfig(.anthropic, apiKey: "key")
+        XCTAssertEqual(previousHash(chat), chat.aiConfigHash())
+        // Families without an only-show rule keep every cached score.
+        let noOnlyShow = FilterSettings(rules: "No scary content", provider: jev)
+        XCTAssertEqual(previousHash(noOnlyShow), noOnlyShow.aiConfigHash())
+        // A decision model only in the fallback position is covered too.
+        let fallbackOnly = FilterSettings(provider: ProviderConfig(.anthropic, apiKey: "key"), allowedContent: "Science", fallbackProvider: jev)
+        XCTAssertNotEqual(previousHash(fallbackOnly), fallbackOnly.aiConfigHash())
     }
 }
 

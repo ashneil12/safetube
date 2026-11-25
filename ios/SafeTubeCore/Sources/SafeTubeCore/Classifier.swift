@@ -24,7 +24,17 @@ public struct ClassifierException: Error, CustomStringConvertible, LocalizedErro
 /// nothing else in the app knows which model is behind it.
 public protocol VideoClassifier {
     /// Scores a batch of videos. May return fewer scores than videos if the model skipped some.
-    func classify(_ videos: [VideoInfo], rules: String) throws -> [Score]
+    /// `rules` is the parent's combined rules prose; `onlyShow` tells the checker explicitly that an
+    /// ONLY SHOW description is active, so a video may only score low (be allowed) on positive evidence
+    /// it belongs inside that description. Chat models read this in the prose itself; decision models
+    /// use it to frame the typed question as eligibility rather than general harmlessness.
+    func classify(_ videos: [VideoInfo], rules: String, onlyShow: Bool) throws -> [Score]
+}
+
+public extension VideoClassifier {
+    func classify(_ videos: [VideoInfo], rules: String) throws -> [Score] {
+        try classify(videos, rules: rules, onlyShow: false)
+    }
 }
 
 public enum Classifiers {

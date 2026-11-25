@@ -180,7 +180,9 @@ public final class DecisionEngine {
                     return
                 }
                 let wanted = Set(eligible.map { $0.id })
-                for score in try c.classify(eligible, rules: settings.effectiveRules()) {
+                // Pass the Only show mode explicitly: a decision model needs its typed question
+                // framed as eligibility, not general harmlessness, or off-topic videos can score low enough to show.
+                for score in try c.classify(eligible, rules: settings.effectiveRules(), onlyShow: !settings.allowedContent.isBlank) {
                     if wanted.contains(score.id), score.p.isFinite, (0...1).contains(score.p) { got[score.id] = score }
                 }
             } catch { failure = (error as? ClassifierException)?.message ?? error.localizedDescription }

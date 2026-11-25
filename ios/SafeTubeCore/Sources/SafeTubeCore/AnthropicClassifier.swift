@@ -10,7 +10,9 @@ public final class AnthropicClassifier: VideoClassifier {
         self.endpoint = endpoint
     }
 
-    public func classify(_ videos: [VideoInfo], rules: String) throws -> [Score] {
+    // onlyShow needs no explicit handling here: the chat system prompt already reads the ONLY SHOW
+    // prose in the rules and reasons over it, unlike a decision model's compressed typed criteria.
+    public func classify(_ videos: [VideoInfo], rules: String, onlyShow: Bool = false) throws -> [Score] {
         if videos.isEmpty { return [] }
         let response = try Http.request(
             endpoint,

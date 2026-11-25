@@ -145,13 +145,27 @@ data class FilterSettings(
     fun outageConfigHash(): String = configHash(includeStateVersion = false)
 
     private fun configHash(includeStateVersion: Boolean): String = Hashing.sha256(
-        listOf(
+        listOfNotNull(
             effectiveRules(),
             provider.cacheIdentity(includeStateVersion),
             fallbackProvider.cacheIdentity(includeStateVersion),
             PromptBuilder.VERSION.toString(),
+            // Scores a decision model produced before its ONLY SHOW question required positive
+            // evidence of eligibility must not be reused: generic off-topic videos could have
+            // been cached as allowed. Like the Clef state version this is a request-semantics
+            // upgrade, not a parent policy change, so the outage latch deliberately survives it.
+            // Absent entirely (not even an empty element) for everyone else, so their cached
+            // scores and hashes are bit-for-bit unchanged.
+            if (includeStateVersion && onlyShowDecisionSemanticsApply) ONLY_SHOW_DECISION_SEMANTICS_VERSION else null,
         ).joinToString("\u0000")
     ).take(16)
+
+    private val onlyShowDecisionSemanticsApply: Boolean
+        get() = allowedContent.isNotBlank() && (provider.isDecisionModel || fallbackProvider.isDecisionModel)
+
+    companion object {
+        private const val ONLY_SHOW_DECISION_SEMANTICS_VERSION = "only-show-decision-v2"
+    }
 }
 
 private fun ProviderConfig.cacheIdentity(includeStateVersion: Boolean): String = listOf(type.name, baseUrl.trim(), modelOrDefault(), accountId.trim(), Hashing.sha256(apiKey), usesThumbnails.toString()).joinToString("\u0000") +

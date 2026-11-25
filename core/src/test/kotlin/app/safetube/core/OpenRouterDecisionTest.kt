@@ -93,6 +93,81 @@ class OpenRouterDecisionTest {
     }
 
     @Test
+    fun `only show requests ask the disallowed question instead of mere harmlessness`() {
+        val c = DecisionModelClassifier(config)
+        val plain = c.buildRequest(listOf(sample), "ONLY SHOW content matching this description; block everything outside it: science")
+        val plainQ = plain.getJSONObject("questions").getJSONObject("v1")
+        assertTrue(plainQ.getString("instructions").contains("including being outside an ONLY SHOW description"))
+        assertEquals("Nothing about video v1 goes against the parent's rules", plainQ.getJSONObject("criteria").getString("false"))
+
+        val req = c.buildRequest(listOf(sample), "ONLY SHOW content matching this description; block everything outside it: science", onlyShow = true)
+        val q = req.getJSONObject("questions").getJSONObject("v1")
+        val instructions = q.getString("instructions")
+        assertTrue(instructions.startsWith("Video v1 can be shown only if the supplied evidence positively places it inside"))
+        assertTrue(instructions.contains("Is it disallowed?"))
+        assertTrue(instructions.contains("Generic child-safe but off-topic, unrelated, or weakly evidenced content is disallowed"))
+        val criteria = q.getJSONObject("criteria")
+        assertTrue(criteria.getString("true").contains("outside the ONLY SHOW description, not positively established inside it"))
+        assertTrue(criteria.getString("false").contains("positively places video v1 inside the ONLY SHOW description"))
+    }
+
+    @Test
+    fun `the reported christian-only nursery fixture is framed as an eligibility decision`() {
+        val nursery = VideoInfo(
+            "ddddddddddd",
+            "Baa Baa Black Sheep | Animal Sounds for Toddlers",
+            "CoComelon - Nursery Rhymes",
+            "Educational songs for kids and toddlers • animals, phonics and learning",
+        )
+        var asked = JSONObject()
+        val c = DecisionModelClassifier(config, transport = { _, _, body ->
+            asked = JSONObject(body)
+            // Representative of the fixed question's live Clef Flash answers for this fixture:
+            // high enough to block at Balanced, unlike the harm-framed mid-range scores.
+            Http.Response(200, JSONObject().put("answers", JSONObject().put("v1", JSONObject().put("noul", 0.84))).toString())
+        })
+        val rules = FilterSettings(allowedContent = "all christian content").effectiveRules()
+        val scores = c.classify(listOf(nursery), rules, onlyShow = true)
+        assertEquals(0.84, scores.single().p)
+        val q = asked.getJSONObject("questions").getJSONObject("v1")
+        assertTrue(q.getString("instructions").contains("Is it disallowed?"))
+        assertTrue(q.getJSONObject("criteria").getString("false").contains("positively places"))
+        assertEquals(Verdict.BLOCK, Strictness.BALANCED.verdictFor(scores.single().p))
+    }
+
+    @Test
+    fun `missing answers under an only show rule fail closed`() {
+        val c = DecisionModelClassifier(config, transport = { _, _, _ ->
+            Http.Response(200, """{"answers":{}}""")
+        })
+        assertTrue(c.classify(listOf(sample), "ONLY SHOW x", onlyShow = true).isEmpty())
+    }
+
+    @Test
+    fun `only show decision scores cached before the eligibility fix are invalidated`() {
+        fun oldIdentity(p: ProviderConfig) = listOf(p.type.name, p.baseUrl.trim(), p.modelOrDefault(), p.accountId.trim(), Hashing.sha256(p.apiKey), p.usesThumbnails.toString()).joinToString("\u0000")
+        fun previousHash(s: FilterSettings) = Hashing.sha256(listOf(s.effectiveRules(), oldIdentity(s.provider), oldIdentity(s.fallbackProvider), PromptBuilder.VERSION.toString()).joinToString("\u0000")).take(16)
+
+        // Jev carries no Clef state-version marker, so any hash change here comes only
+        // from the only-show eligibility semantics.
+        val jev = ProviderConfig(ProviderType.JEV, apiKey = "test-key")
+        // An only-show family on a decision model: cached pre-fix allows must be re-checked.
+        val onlyShow = FilterSettings(rules = "", allowedContent = "Planet Coaster", provider = jev)
+        assertFalse(previousHash(onlyShow) == onlyShow.aiConfigHash())
+        // The same upgrade is not a parent policy change: an in-progress outage survives it.
+        assertEquals(previousHash(onlyShow), onlyShow.outageConfigHash())
+        // Chat-provider only-show rules are unaffected: the chat prompt semantics did not change.
+        val chat = onlyShow.copy(provider = ProviderConfig(ProviderType.ANTHROPIC, apiKey = "key"))
+        assertEquals(previousHash(chat), chat.aiConfigHash())
+        // Families without an only-show rule keep every cached score: nothing about their question changed.
+        val noOnlyShow = FilterSettings(rules = "No scary content", provider = jev)
+        assertEquals(previousHash(noOnlyShow), noOnlyShow.aiConfigHash())
+        // A decision model only in the fallback position is covered too.
+        val fallbackOnly = FilterSettings(allowedContent = "Science", provider = ProviderConfig(ProviderType.ANTHROPIC, apiKey = "key"), fallbackProvider = jev)
+        assertFalse(previousHash(fallbackOnly) == fallbackOnly.aiConfigHash())
+    }
+
+    @Test
     fun `only Clef-family cache identities invalidate old unbounded state scores`() {
         fun oldIdentity(p: ProviderConfig) = listOf(p.type.name, p.baseUrl.trim(), p.modelOrDefault(), p.accountId.trim(), Hashing.sha256(p.apiKey), p.usesThumbnails.toString()).joinToString("\u0000")
         fun previousHash(s: FilterSettings) = Hashing.sha256(listOf(s.effectiveRules(), oldIdentity(s.provider), oldIdentity(s.fallbackProvider), PromptBuilder.VERSION.toString()).joinToString("\u0000")).take(16)

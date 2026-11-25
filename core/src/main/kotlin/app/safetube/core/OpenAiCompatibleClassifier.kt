@@ -9,7 +9,9 @@ import org.json.JSONObject
  */
 class OpenAiCompatibleClassifier(private val config: ProviderConfig) : VideoClassifier {
 
-    override fun classify(videos: List<VideoInfo>, rules: String): List<Score> {
+    // onlyShow needs no explicit handling here: the chat system prompt already reads the ONLY SHOW
+    // prose in the rules and reasons over it, unlike a decision model's compressed typed criteria.
+    override fun classify(videos: List<VideoInfo>, rules: String, onlyShow: Boolean): List<Score> {
         if (videos.isEmpty()) return emptyList()
         val url = config.baseUrl.trim().trimEnd('/') + "/chat/completions"
         val headers = buildMap {

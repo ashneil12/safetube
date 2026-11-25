@@ -18,7 +18,7 @@ class DecisionEngineTest {
     private class FakeClassifier(val scores: Map<String, Double>) : VideoClassifier {
         var calls = 0
         var seen = mutableListOf<String>()
-        override fun classify(videos: List<VideoInfo>, rules: String): List<Score> {
+        override fun classify(videos: List<VideoInfo>, rules: String, onlyShow: Boolean): List<Score> {
             calls++
             seen += videos.map { it.id }
             return videos.mapNotNull { v -> scores[v.id]?.let { Score(v.id, it, "fake") } }
@@ -63,7 +63,7 @@ class DecisionEngineTest {
     @Test
     fun `AI failure leaves videos unknown so they stay hidden`() {
         val failing = object : VideoClassifier {
-            override fun classify(videos: List<VideoInfo>, rules: String): List<Score> =
+            override fun classify(videos: List<VideoInfo>, rules: String, onlyShow: Boolean): List<Score> =
                 throw ClassifierException("401 invalid key")
         }
         val d = engine(InMemoryVerdictStore(), failing).decide(listOf(bus), aiSettings)
@@ -132,7 +132,7 @@ class DecisionEngineTest {
         val many = (0 until 24).map { VideoInfo("v" + it.toString().padStart(10, '0'), "Song $it") }
         val started = java.util.concurrent.CountDownLatch(3)
         val slow = object : VideoClassifier {
-            override fun classify(videos: List<VideoInfo>, rules: String): List<Score> {
+            override fun classify(videos: List<VideoInfo>, rules: String, onlyShow: Boolean): List<Score> {
                 started.countDown()
                 // Only returns once all three batches are in flight together.
                 assertTrue(started.await(5, java.util.concurrent.TimeUnit.SECONDS))
@@ -152,7 +152,7 @@ class DecisionEngineTest {
     fun `only show rules and exceptions reach classifier even without hide rules`() {
         var received = ""
         val fake = object : VideoClassifier {
-            override fun classify(videos: List<VideoInfo>, rules: String): List<Score> {
+            override fun classify(videos: List<VideoInfo>, rules: String, onlyShow: Boolean): List<Score> {
                 received = rules
                 return videos.map { Score(it.id, 0.9, "Outside allowed topics") }
             }
@@ -161,6 +161,57 @@ class DecisionEngineTest {
         assertEquals(Verdict.BLOCK, engine(InMemoryVerdictStore(), fake).decide(listOf(bus), settings).single().verdict)
         assertTrue(received.contains("ONLY SHOW"))
         assertTrue(received.contains("Ordinary rides are fine"))
+    }
+
+    @Test
+    fun `only show mode reaches the classifier explicitly rather than through prose alone`() {
+        val seen = mutableListOf<Boolean>()
+        val recording = object : VideoClassifier {
+            override fun classify(videos: List<VideoInfo>, rules: String, onlyShow: Boolean): List<Score> {
+                seen += onlyShow
+                return videos.map { Score(it.id, 0.9, "Outside allowed topics") }
+            }
+        }
+        engine(InMemoryVerdictStore(), recording).decide(listOf(bus), aiSettings.copy(rules = "", allowedContent = "Planet Coaster"))
+        engine(InMemoryVerdictStore(), recording).decide(listOf(bus), aiSettings)
+        assertEquals(listOf(true, false), seen)
+    }
+
+    @Test
+    fun `only show blocks a generic nursery video on a high outside-score and shows an in-topic one`() {
+        val nursery = VideoInfo("ddddddddddd", "Wheels On The Bus Nursery Rhymes", "Super Simple Songs")
+        val coaster = VideoInfo("eeeeeeeeeee", "Planet Coaster park-building tutorial", "Family Builds")
+        // A decision model honouring the eligibility question scores off-topic content high even
+        // though nothing about it is frightening, and in-topic content low.
+        val fake = FakeClassifier(mapOf(nursery.id to 0.95, coaster.id to 0.02))
+        val settings = aiSettings.copy(rules = "", allowedContent = "Planet Coaster park-building tutorials")
+        val d = engine(InMemoryVerdictStore(), fake).decide(listOf(nursery, coaster), settings)
+        assertEquals(Verdict.BLOCK, d[0].verdict)
+        assertEquals(Verdict.ALLOW, d[1].verdict)
+    }
+
+    @Test
+    fun `only show checker failure keeps videos hidden rather than reopening them`() {
+        val failing = object : VideoClassifier {
+            override fun classify(videos: List<VideoInfo>, rules: String, onlyShow: Boolean): List<Score> =
+                throw ClassifierException("quota exhausted")
+        }
+        val settings = aiSettings.copy(rules = "", allowedContent = "Educational science")
+        val d = engine(InMemoryVerdictStore(), failing).decide(listOf(bus), settings).single()
+        assertEquals(Verdict.UNKNOWN, d.verdict)
+    }
+
+    @Test
+    fun `scores cached before an only show rule do not bypass it`() {
+        val store = InMemoryVerdictStore()
+        val fake = FakeClassifier(mapOf(bus.id to 0.0))
+        val checker = engine(store, fake)
+        // Bus was checked and cached as allowed while no Only show rule existed.
+        assertEquals(Verdict.ALLOW, checker.decide(listOf(bus), aiSettings).single().verdict)
+        assertEquals(1, fake.calls)
+        // Turning on Only show must re-ask: the cached allow cannot carry over.
+        checker.decide(listOf(bus), aiSettings.copy(allowedContent = "Educational science"))
+        assertEquals(2, fake.calls)
     }
 
     @Test
@@ -180,10 +231,10 @@ class DecisionEngineTest {
     fun `fallback checks only missing and invalid primary results`() {
         val fallbackSeen = mutableListOf<String>()
         val primary = object : VideoClassifier {
-            override fun classify(videos: List<VideoInfo>, rules: String) = listOf(Score(bus.id, 0.01, "Valid"), Score(potion.id, Double.NaN, "Bad"))
+            override fun classify(videos: List<VideoInfo>, rules: String, onlyShow: Boolean) = listOf(Score(bus.id, 0.01, "Valid"), Score(potion.id, Double.NaN, "Bad"))
         }
         val fallback = object : VideoClassifier {
-            override fun classify(videos: List<VideoInfo>, rules: String): List<Score> {
+            override fun classify(videos: List<VideoInfo>, rules: String, onlyShow: Boolean): List<Score> {
                 fallbackSeen += videos.map { it.id }
                 return videos.map { Score(it.id, 0.8, "Fallback evidence") }
             }
@@ -199,7 +250,7 @@ class DecisionEngineTest {
     @Test
     fun `fallback recovers primary error and still fails closed when both fail`() {
         val failing = object : VideoClassifier {
-            override fun classify(videos: List<VideoInfo>, rules: String): List<Score> = throw ClassifierException("quota exhausted")
+            override fun classify(videos: List<VideoInfo>, rules: String, onlyShow: Boolean): List<Score> = throw ClassifierException("quota exhausted")
         }
         val settings = aiSettings.copy(fallbackProvider = ProviderConfig(ProviderType.JEV, apiKey = "fallback"))
         val recovered = DecisionEngine(InMemoryVerdictStore(), { if (it.type == ProviderType.JEV) FakeClassifier(mapOf(bus.id to 0.0)) else failing }, null)
@@ -309,7 +360,7 @@ class DecisionEngineTest {
     fun `failed vision check cannot send titleless video to text fallback`() {
         var visionCalls = 0
         val vision = object : VideoClassifier {
-            override fun classify(videos: List<VideoInfo>, rules: String): List<Score> {
+            override fun classify(videos: List<VideoInfo>, rules: String, onlyShow: Boolean): List<Score> {
                 visionCalls++
                 throw ClassifierException("Quota exhausted")
             }

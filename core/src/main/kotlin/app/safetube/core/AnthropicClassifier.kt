@@ -9,7 +9,9 @@ class AnthropicClassifier(
     private val endpoint: String = "https://api.anthropic.com/v1/messages",
 ) : VideoClassifier {
 
-    override fun classify(videos: List<VideoInfo>, rules: String): List<Score> {
+    // onlyShow needs no explicit handling here: the chat system prompt already reads the ONLY SHOW
+    // prose in the rules and reasons over it, unlike a decision model's compressed typed criteria.
+    override fun classify(videos: List<VideoInfo>, rules: String, onlyShow: Boolean): List<Score> {
         if (videos.isEmpty()) return emptyList()
         val response = Http.request(
             endpoint,

@@ -10,9 +10,15 @@ class ClassifierException(message: String, cause: Throwable? = null) : Exception
  * nothing else in the app knows which model is behind it.
  */
 interface VideoClassifier {
-    /** Scores a batch of videos. May return fewer scores than videos if the model skipped some. */
+    /**
+     * Scores a batch of videos. May return fewer scores than videos if the model skipped some.
+     * [rules] is the parent's combined rules prose; [onlyShow] tells the checker explicitly that an
+     * ONLY SHOW description is active, so a video may only score low (be allowed) on positive evidence
+     * it belongs inside that description. Chat models read this in the prose itself; decision models
+     * use it to frame the typed question as eligibility rather than general harmlessness.
+     */
     @Throws(ClassifierException::class)
-    fun classify(videos: List<VideoInfo>, rules: String): List<Score>
+    fun classify(videos: List<VideoInfo>, rules: String, onlyShow: Boolean = false): List<Score>
 }
 
 object Classifiers {

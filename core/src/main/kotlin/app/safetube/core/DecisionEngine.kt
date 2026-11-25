@@ -153,7 +153,9 @@ class DecisionEngine(
                 return emptyMap()
             }
             return try {
-                checker?.classify(eligible, settings.effectiveRules()).orEmpty()
+                // Pass the Only show mode explicitly: a decision model needs its typed question
+                // framed as eligibility, not general harmlessness, or off-topic videos can score low enough to show.
+                checker?.classify(eligible, settings.effectiveRules(), settings.allowedContent.isNotBlank()).orEmpty()
                     .filter { it.p.isFinite() && it.p in 0.0..1.0 && eligible.any { v -> v.id == it.id } }
                     .associateBy { it.id }
             } catch (e: Exception) {
