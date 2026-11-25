@@ -121,7 +121,7 @@
   // Holding the YouTube logo this long opens the parent settings.
   var PARENT_HOLD_MS = 3000, RING_DELAY_MS = 500;
   var LOGO_SEL = 'ytm-home-logo, .mobile-topbar-header-endpoint, ytd-topbar-logo-renderer, #logo, a[aria-label="YouTube Home"]';
-  var VIDEO_LINK_SEL = 'a[href*="/watch?"], a[href*="/watch/"], a[href*="/shorts/"], a[href*="youtu.be/"], a[href*="/live/"]';
+  var VIDEO_LINK_SEL = 'a[href*="/watch?"], a[href*="/watch/"], a[href*="/shorts/"], a[href*="youtu.be/"], a[href*="/live/"], a[href*="/embed/"], a[href*="/v/"]';
 
   var PLAYER_SEL = [
     'video', '#player', '#movie_player', 'ytm-player', '.player-container', '#player-container-id',
@@ -479,9 +479,9 @@
   var overlayFor = null;
 
   function currentWatchId() {
-    var p = location.pathname;
-    if (p === '/watch' || p.indexOf('/shorts/') === 0 || p.indexOf('/live/') === 0) return idFromUrl(location.href);
-    return null;
+    // Use the same playable URL parser as cards and links. Alternate YouTube
+    // players (/embed, /v and /watch/<id>) need the same approval as /watch?v=.
+    return idFromUrl(location.href);
   }
 
   function checkWatchPage() {

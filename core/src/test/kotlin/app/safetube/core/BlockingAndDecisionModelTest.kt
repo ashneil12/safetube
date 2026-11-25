@@ -37,6 +37,9 @@ class BlockingAndDecisionModelTest {
         assertEquals("dQw4w9WgXcQ", VideoLinks.videoId("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=10"))
         assertEquals("dQw4w9WgXcQ", VideoLinks.videoId("https://youtu.be/dQw4w9WgXcQ?si=abc"))
         assertEquals("dQw4w9WgXcQ", VideoLinks.videoId("https://youtube.com/shorts/dQw4w9WgXcQ"))
+        assertEquals("dQw4w9WgXcQ", VideoLinks.videoId("https://www.youtube.com/embed/dQw4w9WgXcQ"))
+        assertEquals("dQw4w9WgXcQ", VideoLinks.videoId("https://www.youtube.com/v/dQw4w9WgXcQ"))
+        assertEquals("dQw4w9WgXcQ", VideoLinks.videoId("https://www.youtube.com/watch/dQw4w9WgXcQ"))
         assertEquals("dQw4w9WgXcQ", VideoLinks.videoId("dQw4w9WgXcQ"))
         assertNull(VideoLinks.videoId("https://www.youtube.com/@SuperSimpleSongs"))
     }

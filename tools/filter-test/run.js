@@ -32,7 +32,7 @@ function check(name, cond) {
       res.writeHead(200, { 'content-type': 'text/html' });
       res.end(fs.readFileSync(path.join(__dirname, 'demand-youtube.html'), 'utf8')); return;
     }
-    if (req.url.startsWith('/watch?isolated=')) {
+    if (req.url.startsWith('/watch?isolated=') || /^\/(embed|v|watch)\//.test(req.url)) {
       res.writeHead(200, { 'content-type': 'text/html' });
       res.end('<html><body><div id="player"><video></video></div></body></html>'); return;
     }
@@ -334,6 +334,7 @@ function check(name, cond) {
   await lockedBoot.evaluate(() => { window.__safetube.setAiUnavailable(false); window.__safetube.apply({ WHEELSBUS01: 'allow' }); });
   check('fresh successful retry can unlock an isolated direct watch page', await lockedBoot.locator('#st-overlay').count() === 0 && await lockedBoot.locator('#player').isVisible());
   await lockedBoot.close();
+  await require('./watch-paths')({ browser, base, filter: FILTER, check });
   await require('./demand')({ browser, base, filter: FILTER, check });
   await browser.close();
   server.close();

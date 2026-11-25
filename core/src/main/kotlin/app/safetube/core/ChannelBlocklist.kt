@@ -63,10 +63,11 @@ class ChannelBlocklist(entries: List<String>) {
 
 /** Pulls a video id out of anything a parent might paste: a watch link, a short link, a Shorts link or a bare id. */
 object VideoLinks {
+    // The same playable shapes filter.js treats as video pages, so a parent can hide whatever the child opened.
     private val PATTERNS = listOf(
         Regex("[?&]v=([A-Za-z0-9_-]{11})"),
         Regex("youtu\\.be/([A-Za-z0-9_-]{11})"),
-        Regex("/(?:shorts|live|embed)/([A-Za-z0-9_-]{11})"),
+        Regex("/(?:shorts|live|embed|v|watch)/([A-Za-z0-9_-]{11})"),
     )
 
     fun videoId(input: String): String? {
